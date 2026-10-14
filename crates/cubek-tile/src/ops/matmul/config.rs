@@ -103,6 +103,7 @@ fn store_method(device_props: &DeviceProperties, dtype: ElemType) -> StoreMethod
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub struct RegisterBlock {
     /// Scalar register budget for the accumulator block; blocks over budget stay rolled.
+    /// Also limits the tap count eligible for gather-loop unrolling.
     pub budget: usize,
     /// Whether to generate a fast in-bounds path plus checked fallback for edge tiles.
     pub split_edge: bool,
