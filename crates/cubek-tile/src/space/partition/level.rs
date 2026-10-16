@@ -2,7 +2,7 @@
 
 use cubecl::prelude::*;
 
-use super::{CubeOrder, PlaneOrder};
+use super::{CubeOrder, PlaneOrder, UnitCube};
 use crate::{Axis, AxisMap, Extent, Space};
 
 /// One decomposition level of a space: who takes its tiles and how it cuts each axis it names.
@@ -19,6 +19,9 @@ pub struct Level {
     /// The order the launch's planes take this level's tiles in, where it is a plane level
     /// spanning the launch rather than one cube ([`spanning_launch`](Level::spanning_launch)).
     plane_order: Option<PlaneOrder>,
+    /// The cubes the launch's units are grouped in, where it is a unit level spanning the launch
+    /// ([`units_spanning_launch`](Level::units_spanning_launch)).
+    unit_cube: Option<UnitCube>,
     /// Axes whose tiles go out last first ([`Levels::reversed`](crate::Levels::reversed)).
     reversed: Vec<Axis>,
 }
@@ -286,6 +289,7 @@ impl Level {
             fillers: 0,
             order: CubeOrder::RowMajor,
             plane_order: None,
+            unit_cube: None,
             reversed: Vec::new(),
         }
     }
@@ -330,13 +334,52 @@ impl Level {
             fillers: 0,
             order: CubeOrder::RowMajor,
             plane_order: Some(order),
+            unit_cube: None,
             reversed: Vec::new(),
         }
     }
 
-    /// The order the launch's planes take this level's tiles in, where it spans the launch.
+    /// The unit level over every tile of `tile`'s axes, each `(axis, tile)`, one tile to each
+    /// unit of the whole launch, the units grouped in cubes of `cube`: the outermost level of a
+    /// partitioning with no cube or plane level.
+    pub(crate) fn units_spanning_launch(tile: &[(Axis, usize)], cube: UnitCube) -> Level {
+        assert!(
+            cube.units() > 0,
+            "Level::units_spanning_launch: a cube holds at least one unit"
+        );
+        let order = cube.order();
+        Level {
+            coverage: Coverage::Distribute(ComputeScope::Unit),
+            plane_order: None,
+            unit_cube: Some(cube),
+            ..Level::spanning_launch(tile, order)
+        }
+    }
+
+    /// The order the launch's planes take this level's tiles in, where it is a plane level
+    /// spanning the launch.
     pub fn plane_order(&self) -> Option<&PlaneOrder> {
         self.plane_order.as_ref()
+    }
+
+    /// The cubes the launch's units are grouped in, where it is a unit level spanning the launch.
+    pub fn unit_cube(&self) -> Option<UnitCube> {
+        self.unit_cube
+    }
+
+    /// The order the launch's planes or units take this level's tiles in, where it spans the
+    /// launch: one tile a unit, in row order, for units.
+    pub(crate) fn launch_order(&self) -> Option<PlaneOrder> {
+        match (&self.plane_order, self.unit_cube) {
+            (Some(order), _) => Some(order.clone()),
+            (None, Some(cube)) => Some(cube.order()),
+            (None, None) => None,
+        }
+    }
+
+    /// Whether this level hands its tiles to the planes or units of the whole launch.
+    pub fn spans_launch(&self) -> bool {
+        self.plane_order.is_some() || self.unit_cube.is_some()
     }
 
     /// One tile of each of `axes` per cube, on the grid's `Z` dimension.
@@ -419,9 +462,9 @@ impl Level {
     /// whatever order it deals them in: the first workers launched take the last tiles.
     pub(crate) fn reversed(mut self, axes: &[Axis]) -> Level {
         assert!(
-            self.coverage == Coverage::Distribute(ComputeScope::Cube) || self.plane_order.is_some(),
-            "Level::reversed: only a cube level or a plane level spanning the launch hands its \
-             tiles out in a launch order, and this level's tiles are taken by {:?}",
+            self.coverage == Coverage::Distribute(ComputeScope::Cube) || self.spans_launch(),
+            "Level::reversed: only a cube level or a level spanning the launch hands its tiles out \
+             in a launch order, and this level's tiles are taken by {:?}",
             self.coverage
         );
         assert!(
@@ -554,7 +597,7 @@ impl Level {
             return false;
         };
         let cut = !space.extent(axis).is_multiple_of(tile);
-        match &self.plane_order {
+        match self.launch_order() {
             None => cut,
             Some(order) => cut || order.overruns(self, space, axis),
         }
