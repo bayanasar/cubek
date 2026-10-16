@@ -343,16 +343,11 @@ impl Level {
     /// unit of the whole launch, the units grouped in cubes of `cube`: the outermost level of a
     /// partitioning with no cube or plane level.
     pub(crate) fn units_spanning_launch(tile: &[(Axis, usize)], cube: UnitCube) -> Level {
-        assert!(
-            cube.units() > 0,
-            "Level::units_spanning_launch: a cube holds at least one unit"
-        );
-        let order = cube.order();
         Level {
             coverage: Coverage::Distribute(ComputeScope::Unit),
             plane_order: None,
             unit_cube: Some(cube),
-            ..Level::spanning_launch(tile, order)
+            ..Level::spanning_launch(tile, cube.order())
         }
     }
 

@@ -136,15 +136,15 @@ impl Planes {
 
 /// An `m × n × k` product, written into each of `batches` batches of the output.
 #[derive(Clone, Copy, Debug)]
-struct Problem {
-    m: usize,
-    n: usize,
-    k: usize,
-    batches: usize,
+pub(super) struct Problem {
+    pub(super) m: usize,
+    pub(super) n: usize,
+    pub(super) k: usize,
+    pub(super) batches: usize,
 }
 
 impl Problem {
-    const fn new(m: usize, n: usize, k: usize) -> Self {
+    pub(super) const fn new(m: usize, n: usize, k: usize) -> Self {
         Self {
             m,
             n,
@@ -153,21 +153,21 @@ impl Problem {
         }
     }
 
-    fn batched(self, batches: usize) -> Self {
+    pub(super) fn batched(self, batches: usize) -> Self {
         Self { batches, ..self }
     }
 }
 
-fn lhs(i: usize, p: usize, k: usize) -> f32 {
+pub(super) fn lhs(i: usize, p: usize, k: usize) -> f32 {
     ((i * k + p) % 7) as f32 - 3.0
 }
 
-fn rhs(p: usize, j: usize, n: usize) -> f32 {
+pub(super) fn rhs(p: usize, j: usize, n: usize) -> f32 {
     ((p * n + j) % 5) as f32 - 2.0
 }
 
 /// Whether the test device adds `f32`s atomically, which every case's output takes.
-fn adds_atomically(client: &cubecl::client::Client) -> bool {
+pub(super) fn adds_atomically(client: &cubecl::client::Client) -> bool {
     let usage = client
         .properties()
         .atomic_type_usage(Type::atomic(ElemType::Float(FloatKind::F32)));
@@ -298,7 +298,7 @@ fn run(problem: Problem, planes: &Planes, dealt: Dealt<'_>) -> Option<HostData> 
 
 /// Every cell of every batch of the output is its product once: no tile left out, none taken
 /// twice.
-fn assert_every_tile_once(got: &HostData, problem: Problem, what: &str) {
+pub(super) fn assert_every_tile_once(got: &HostData, problem: Problem, what: &str) {
     let Problem { m, n, k, batches } = problem;
     for batch in 0..batches {
         for i in 0..m {

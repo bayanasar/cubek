@@ -7,19 +7,15 @@
 //! past the grid, which the binding masks.
 #![allow(non_snake_case)]
 
-use cubecl::{
-    features::AtomicUsage,
-    ir::{ElemType, FloatKind, Type},
-    prelude::*,
-    zspace::shape,
-};
-use cubek_test_utils::{HostData, HostDataType, TestInput, TestOutcome, ValidationResult};
+use cubecl::{prelude::*, zspace::shape};
+use cubek_test_utils::{HostData, HostDataType, TestInput};
 
 use cubek_tile::kind::{Boundary, Write};
 use cubek_tile::launch::{BoundaryPolicy, Buffered, Destination, DestinationLaunch, Grid};
 use cubek_tile::space::UnitCube;
 use cubek_tile::*;
 
+use super::launch_planes::{Problem, adds_atomically, assert_every_tile_once, lhs, rhs};
 use super::{Form, kernel_form};
 
 const M: Axis = Axis(0);
@@ -83,28 +79,15 @@ fn levels(cube: UnitCube, reversed: &[Axis]) -> Vec<Level> {
         .build()
 }
 
-/// An `m × n × k` product, written into each of `batches` batches of the output.
-#[derive(Clone, Copy, Debug)]
-struct Problem {
-    m: usize,
-    n: usize,
-    k: usize,
-    batches: usize,
-}
-
-impl Problem {
-    const fn new(m: usize, n: usize, k: usize, batches: usize) -> Self {
-        Self { m, n, k, batches }
-    }
-}
-
 /// Problems whose edges cut the blocks short, one and three batches.
-const PROBLEMS: [Problem; 4] = [
-    Problem::new(8, 16, 8, 1),
-    Problem::new(7, 29, 11, 1),
-    Problem::new(13, 5, 6, 3),
-    Problem::new(4, 4, 4, 3),
-];
+fn problems() -> [Problem; 4] {
+    [
+        Problem::new(8, 16, 8),
+        Problem::new(7, 29, 11),
+        Problem::new(13, 5, 6).batched(3),
+        Problem::new(4, 4, 4).batched(3),
+    ]
+}
 
 /// Cubes of one plane of one unit, a plane of two, and three planes of two.
 const CUBES: [UnitCube; 3] = [
@@ -121,29 +104,6 @@ const CUBES: [UnitCube; 3] = [
         planes: 3,
     },
 ];
-
-fn lhs(i: usize, p: usize, k: usize) -> f32 {
-    ((i * k + p) % 7) as f32 - 3.0
-}
-
-fn rhs(p: usize, j: usize, n: usize) -> f32 {
-    ((p * n + j) % 5) as f32 - 2.0
-}
-
-/// Whether the test device adds `f32`s atomically, which every case's output takes.
-fn adds_atomically(client: &cubecl::client::Client) -> bool {
-    let usage = client
-        .properties()
-        .atomic_type_usage(Type::atomic(ElemType::Float(FloatKind::F32)));
-    let adds = usage.contains(AtomicUsage::Add);
-    if !adds {
-        TestOutcome::Validated(ValidationResult::Skipped(
-            "device has no f32 atomic add".to_string(),
-        ))
-        .enforce();
-    }
-    adds
-}
 
 /// `problem`'s product, every unit of the launch a block; `None` where the device cannot add into
 /// the output.
@@ -214,30 +174,12 @@ fn run(problem: Problem, cube: UnitCube, reversed: &[Axis], form: Form<'_>) -> O
     ))
 }
 
-/// Every cell of every batch of the output is its product once: no tile left out, none taken
-/// twice.
-fn assert_every_tile_once(got: &HostData, problem: Problem, what: &str) {
-    let Problem { m, n, k, batches } = problem;
-    for batch in 0..batches {
-        for i in 0..m {
-            for j in 0..n {
-                let want: f32 = (0..k).map(|p| lhs(i, p, k) * rhs(p, j, n)).sum();
-                assert_eq!(
-                    got.get_f32(&[batch, i, j]),
-                    want,
-                    "{what}: at ({batch}, {i}, {j})"
-                );
-            }
-        }
-    }
-}
-
 /// Every unit of the launch takes one block, in cubes of one unit, of a plane, and of several
 /// planes, the last cube's units past the last tile taking none.
 #[test]
 fn the_launch_units_take_every_tile_once() {
     for cube in CUBES {
-        for problem in PROBLEMS {
+        for problem in problems() {
             if let Some(got) = run(problem, cube, &[], Form::Static) {
                 assert_every_tile_once(&got, problem, &format!("{cube:?}"));
             }
@@ -251,7 +193,7 @@ fn reversed_launch_units_take_every_tile_once() {
     let cube = CUBES[2];
     for reversed in [&[M][..], &[N], &[M, N, B]] {
         for form in [Form::Static, Form::Dynamic] {
-            for problem in PROBLEMS {
+            for problem in problems() {
                 if let Some(got) = run(problem, cube, reversed, form) {
                     assert_every_tile_once(&got, problem, &format!("{reversed:?}, {form:?}"));
                 }
@@ -286,7 +228,7 @@ fn the_launch_holds_every_unit() {
 fn every_unit_of_the_launch_walks_one_tile() {
     let client = cubecl::test_device().client();
     for cube in CUBES {
-        for problem in PROBLEMS {
+        for problem in problems() {
             let Problem { m, n, k, batches } = problem;
             let partitioning = Partitioning::new(
                 Space::new(&[(B, batches), (M, m), (N, n), (K, k)]),

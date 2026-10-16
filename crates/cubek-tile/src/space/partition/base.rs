@@ -280,7 +280,7 @@ impl Partitioning {
         let mut total = 1u32;
         let mut space = self.space.clone();
         for level in &self.levels {
-            // A unit of a level spanning the launch takes one tile, and asks for no units of its own.
+            // A unit of the whole launch takes one tile, and asks for no units of its own.
             if levels(level) && level.unit_cube().is_none() {
                 match level.shared_by() {
                     Some(workers) => total *= workers as u32,
