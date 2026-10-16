@@ -15,6 +15,7 @@ mod erased;
 mod imperative;
 mod lane_runs;
 mod launch_planes;
+mod launch_units;
 mod launcher;
 mod leaf;
 mod leaves;

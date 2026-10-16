@@ -1,9 +1,10 @@
 //! The order a plane level spanning the launch hands its tiles to the launch's planes
-//! ([`PlaneOrder`]).
+//! ([`PlaneOrder`]), and the cubes a unit level spanning the launch groups its units in
+//! ([`UnitCube`]).
 
 use cubecl::prelude::*;
 
-use super::{CubeOrder, Level, cube_positions};
+use super::{ComputeScope, CubeOrder, Level, cube_positions};
 use crate::{Axis, Coords, CubeAxis, Integer, IntegerExpand, Space};
 
 /// The most cubes one grid dimension takes on every device a launch may run on.
@@ -162,22 +163,48 @@ impl PlaneOrder {
     }
 }
 
-/// This plane's tile of `level`, a plane level spanning the launch, along each axis of `space`:
-/// `(positions, counts)`: along each of the level's axes the tile's index and `1`, an index past
-/// the last for a plane past the last tile; along each other axis `0` and every tile. `grid` is
-/// the tiles along each axis.
+/// The cubes a unit level spanning the launch groups its units in
+/// ([`Levels::launch_units`](crate::Levels::launch_units)): `planes` planes of `plane_width` units
+/// each. The units share nothing, so the cube is only how the launch groups them.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct UnitCube {
+    pub plane_width: usize,
+    pub planes: usize,
+}
+
+impl UnitCube {
+    /// Units one cube holds.
+    pub fn units(&self) -> usize {
+        self.plane_width * self.planes
+    }
+
+    /// The order the launch's units take a level's tiles in: one tile a unit, the tiles in row
+    /// order, [`units`](Self::units) a cube.
+    pub(crate) fn order(&self) -> PlaneOrder {
+        PlaneOrder::new(&[], CubeOrder::RowMajor).cubes_of(self.units())
+    }
+}
+
+/// This plane's or unit's tile of `level`, a level spanning the launch, along each axis of
+/// `space`: `(positions, counts)`: along each of the level's axes the tile's index and `1`, an
+/// index past the last for an instance past the last tile; along each other axis `0` and every
+/// tile. `grid` is the tiles along each axis.
 #[cube]
-pub(crate) fn launch_plane_tiles(
+pub(crate) fn launch_tiles(
     #[comptime] space: Space,
     #[comptime] level: Level,
     grid: &Coords<usize>,
 ) -> (Coords<usize>, Coords<usize>) {
     let order = comptime!(
         level
-            .plane_order()
-            .cloned()
-            .expect("a level spanning the launch states the order its planes take")
+            .launch_order()
+            .expect("a level spanning the launch states the order its instances take")
     );
+    // An instance's place in its cube: a plane's row, or a unit's place among all of its units.
+    let in_cube = match comptime!(level.coverage().scope()) {
+        Some(ComputeScope::Unit) => UNIT_POS as usize,
+        _ => UNIT_POS_Y as usize,
+    };
     let rank = comptime!(space.rank());
     // The level's axes in the order it names them: the first rides fastest across the blocks, as
     // a cube level's `X` does.
@@ -193,11 +220,11 @@ pub(crate) fn launch_plane_tiles(
     let cube = CubeAxis::position(CubeAxis::X)
         .plus(CubeAxis::position(CubeAxis::Y).times(CUBE_COUNT_X as usize));
     let (block, local) = if comptime!(order.one_block_a_cube()) {
-        (cube, UNIT_POS_Y as usize)
+        (cube, in_cube)
     } else {
         let flat = cube
             .times(comptime!(order.planes_per_cube()).runtime())
-            .plus(UNIT_POS_Y as usize);
+            .plus(in_cube);
         let planes = comptime!(order.block_planes()).runtime();
         (flat.divided_by(planes), flat.remainder(planes))
     };

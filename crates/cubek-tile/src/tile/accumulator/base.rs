@@ -103,6 +103,8 @@ pub(crate) fn plane_windows(space: &Space, levels: &[Level]) -> usize {
     for level in levels {
         if let Some(order) = level.plane_order() {
             planes *= order.planes_per_cube();
+        } else if let Some(cube) = level.unit_cube() {
+            planes *= cube.planes;
         } else if let Some(per_instance) = level.coverage().scope().and_then(ComputeScope::planes) {
             let mut instances = 1;
             for axis in level.axes() {

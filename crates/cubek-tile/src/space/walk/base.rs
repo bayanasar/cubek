@@ -10,7 +10,7 @@ use crate::{
 
 use super::distribution::{AxisDistribution, Distribution};
 use crate::Spread;
-use crate::space::partition::{GridCount, in_plane_axes, launch_plane_tiles, swizzled_positions};
+use crate::space::partition::{GridCount, in_plane_axes, launch_tiles, swizzled_positions};
 
 /// The runtime odometer over a [`Space`]'s tiles under one [`Level`].
 #[derive(CubeType)]
@@ -69,7 +69,7 @@ impl Walk {
             }
         }
 
-        let (counts, positions, scales) = match comptime!(level.plane_order().is_some()) {
+        let (counts, positions, scales) = match comptime!(level.spans_launch()) {
             true => Walk::spanning_launch(comptime!(host.clone()), comptime!(level.clone()), &grid),
             false => Walk::dealt(
                 comptime!(host.clone()),
@@ -99,15 +99,15 @@ impl Walk {
         }
     }
 
-    /// `(counts, positions, scales)` of a plane level spanning the launch: along each of its axes,
-    /// the one tile this plane's place in the launch names, past the last for a plane past the
+    /// `(counts, positions, scales)` of a level spanning the launch: along each of its axes, the
+    /// one tile this plane's or unit's place in the launch names, past the last for one past the
     /// last tile, which the binding masks; every tile of the others.
     fn spanning_launch(
         #[comptime] host: Space,
         #[comptime] level: Level,
         grid: &Coords<usize>,
     ) -> (Coords<usize>, Coords<usize>, Coords<usize>) {
-        let (positions, counts) = launch_plane_tiles(comptime!(host.clone()), level, grid);
+        let (positions, counts) = launch_tiles(comptime!(host.clone()), level, grid);
         let mut scales = Coords::<usize>::new();
         #[unroll]
         for _ in 0..comptime!(host.rank()) {
