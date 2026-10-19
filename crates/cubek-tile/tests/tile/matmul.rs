@@ -25,23 +25,26 @@ use super::{Form, implied, uncut};
 /// advertise, so *some* config is not enough; returns `false` (after enforcing a skip) if absent.
 pub(crate) fn require_cmma_8x8x8_f32(client: &Client) -> bool {
     let f32_ty = f32::elem_type_native();
-    require_cmma_8x8x8(client, f32_ty, f32_ty)
+    require_cmma::<8>(client, f32_ty, f32_ty)
 }
 
-/// Whether the device runs an 8x8x8 cmma fragment over `operands`, summing in `sum`; a skip where
-/// it does not.
-pub(crate) fn require_cmma_8x8x8(client: &Client, operands: ElemType, sum: ElemType) -> bool {
+/// Whether the device runs an `EDGE`³ cmma fragment over `operands`, summing in `sum`; a skip
+/// where it does not.
+pub(crate) fn require_cmma<const EDGE: u32>(
+    client: &Client,
+    operands: ElemType,
+    sum: ElemType,
+) -> bool {
     let supported = client.properties().features.matmul.cmma.iter().any(|cfg| {
         cfg.a_type == operands
             && cfg.b_type == operands
             && cfg.cd_type == sum
-            && cfg.m == 8
-            && cfg.n == 8
-            && cfg.k == 8
+            && (cfg.m, cfg.n, cfg.k) == (EDGE, EDGE, EDGE)
     });
     if !supported {
         TestOutcome::Validated(ValidationResult::Skipped(format!(
-            "device has no 8x8x8 cmma (tensor-core) fragment over {operands:?} summing in {sum:?}"
+            "device has no {EDGE}x{EDGE}x{EDGE} cmma (tensor-core) fragment over {operands:?} \
+             summing in {sum:?}"
         )))
         .enforce();
     }
@@ -3800,17 +3803,7 @@ fn cmma_matmul_plane_partitioned_stage_bounces_where_it_overhangs() {
 fn cmma_matmul_plane_partitioned_stage_overhangs_at_f16_fragments() {
     let client = cubecl::test_device().client();
     let (operands, sum) = (f16::elem_type_native(), f32::elem_type_native());
-    let offered = client.properties().features.matmul.cmma.iter().any(|cfg| {
-        cfg.a_type == operands
-            && cfg.b_type == operands
-            && cfg.cd_type == sum
-            && (cfg.m, cfg.n, cfg.k) == (16, 16, 16)
-    });
-    if !offered {
-        TestOutcome::Validated(ValidationResult::Skipped(
-            "device has no 16x16x16 f16 cmma fragment summed in f32".to_string(),
-        ))
-        .enforce();
+    if !require_cmma::<16>(&client, operands, sum) {
         return;
     }
 
