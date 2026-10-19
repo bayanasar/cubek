@@ -3623,6 +3623,54 @@ fn mma_matmul_8x8x8() {
     assert_matmul_arange(&client, c.handle(), m, n, k);
 }
 
+/// [`mma_matmul_8x8x8`] with a stage four instructions deep: the fragment is read off the shared
+/// stage one instruction's `k` at a time, whatever layout the target's registers take, and the
+/// steps sum into one accumulator.
+#[test]
+fn mma_matmul_8x8x8_four_instructions_deep() {
+    let client = cubecl::test_device().client();
+    if !require_mma_8x8x8_f32(&client) {
+        return;
+    }
+
+    let (m, n, k) = (8usize, 8usize, 32usize);
+    let launcher = implied(
+        &client,
+        Partitioning::new(
+            Space::new(&[(M, m), (N, n), (K, k)]),
+            Levels::leaf(&[(M, m), (N, n), (K, k)])
+                .walk_every(&[M, N, K])
+                .build(),
+        ),
+        Form::Static,
+    );
+
+    let a = TileInput::builder(&client, launcher.space().subspace(&[M, K]))
+        .untiled()
+        .arange();
+    let b = TileInput::builder(&client, launcher.space().subspace(&[K, N]))
+        .untiled()
+        .arange();
+    // Poisoned, not zeroed: the kernel zeroes the accumulator fragment.
+    let c = TileInput::builder(&client, launcher.space().subspace(&[M, N]))
+        .untiled()
+        .uniform(4242, 10., 100.);
+
+    mma_matmul_k_walk::launch(
+        &client,
+        launcher.cube_count(),
+        launcher.cube_dim(),
+        a.arg(1),
+        b.arg(1),
+        c.arg(1),
+        launcher.partitioning_arg(),
+        launcher.partitioning().level(0),
+        MmaIo::manual(),
+        f32::elem_type_native(),
+    );
+    assert_matmul_arange(&client, c.handle(), m, n, k);
+}
+
 /// The multi-plane cmma stage: a double-buffered K walk fills a shared `16×8`/`8×16` stage
 /// cooperatively (cyclic across the cube's 128 units), and a plane-partitioned inner level hands
 /// each of the 4 planes an `8×8` fragment resident across all four K steps. Tensor-core only.
