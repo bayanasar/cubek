@@ -29,7 +29,7 @@ use cubek_tile::stage::{Prefetch, RowChunks, UnitRead};
 use cubek_tile::*;
 use half::f16;
 
-use super::matmul::{require_cmma_8x8x8, require_cmma_8x8x8_f32};
+use super::matmul::{require_cmma, require_cmma_8x8x8_f32};
 use super::{Form, implied};
 use cubek_tile::launch::Bound;
 
@@ -2907,7 +2907,7 @@ fn check_staged_stepped(
     let w = TileOrdered::new(rows, n_tiles, k_tiles);
     let client = cubecl::test_device().client();
     let dtype = f32::elem_type_native();
-    if !require_cmma_8x8x8(&client, elem, dtype) {
+    if !require_cmma::<8>(&client, elem, dtype) {
         return;
     }
     let c = TestInput::builder(client.clone(), shape![rows, w.cols()])
