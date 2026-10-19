@@ -14,6 +14,7 @@
 
 use cubecl::{
     bytes::Bytes,
+    ir::types::MatrixShape,
     prelude::*,
     quant::scheme::{QuantValue, ScaleDtype},
     std::tensor::TensorHandle,
@@ -2907,7 +2908,7 @@ fn check_staged_stepped(
     let w = TileOrdered::new(rows, n_tiles, k_tiles);
     let client = cubecl::test_device().client();
     let dtype = f32::elem_type_native();
-    if !require_cmma::<8>(&client, elem, dtype) {
+    if !require_cmma(&client, elem, dtype, MatrixShape { m: 8, n: 8, k: 8 }) {
         return;
     }
     let c = TestInput::builder(client.clone(), shape![rows, w.cols()])

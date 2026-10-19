@@ -3,7 +3,12 @@
 //! drive.
 #![allow(non_snake_case)]
 
-use cubecl::{ir::ElemType, prelude::*, std::tensor::TensorHandle, zspace::shape};
+use cubecl::{
+    ir::{ElemType, types::MatrixShape},
+    prelude::*,
+    std::tensor::TensorHandle,
+    zspace::shape,
+};
 use cubek_test_utils::{
     HostData, HostDataType, TestInput, TestOutcome, TileInput, ValidationResult,
     assert_equals_approx, skip_unless_plane_holds,
@@ -25,26 +30,28 @@ use super::{Form, implied, uncut};
 /// advertise, so *some* config is not enough; returns `false` (after enforcing a skip) if absent.
 pub(crate) fn require_cmma_8x8x8_f32(client: &Client) -> bool {
     let f32_ty = f32::elem_type_native();
-    require_cmma::<8>(client, f32_ty, f32_ty)
+    require_cmma(client, f32_ty, f32_ty, MatrixShape { m: 8, n: 8, k: 8 })
 }
 
-/// Whether the device runs an `EDGE`³ cmma fragment over `operands`, summing in `sum`; a skip
+/// Whether the device runs a cmma fragment of `shape` over `operands`, summing in `sum`; a skip
 /// where it does not.
-pub(crate) fn require_cmma<const EDGE: u32>(
+pub(crate) fn require_cmma(
     client: &Client,
     operands: ElemType,
     sum: ElemType,
+    shape: MatrixShape,
 ) -> bool {
+    let MatrixShape { m, n, k } = shape;
     let supported = client.properties().features.matmul.cmma.iter().any(|cfg| {
         cfg.a_type == operands
             && cfg.b_type == operands
             && cfg.cd_type == sum
-            && (cfg.m, cfg.n, cfg.k) == (EDGE, EDGE, EDGE)
+            && (cfg.m as usize, cfg.n as usize, cfg.k as usize) == (m, n, k)
     });
     if !supported {
         TestOutcome::Validated(ValidationResult::Skipped(format!(
-            "device has no {EDGE}x{EDGE}x{EDGE} cmma (tensor-core) fragment over {operands:?} \
-             summing in {sum:?}"
+            "device has no {m}x{n}x{k} cmma (tensor-core) fragment over {operands:?} summing in \
+             {sum:?}"
         )))
         .enforce();
     }
@@ -3803,7 +3810,16 @@ fn cmma_matmul_plane_partitioned_stage_bounces_where_it_overhangs() {
 fn cmma_matmul_plane_partitioned_stage_overhangs_at_f16_fragments() {
     let client = cubecl::test_device().client();
     let (operands, sum) = (f16::elem_type_native(), f32::elem_type_native());
-    if !require_cmma::<16>(&client, operands, sum) {
+    if !require_cmma(
+        &client,
+        operands,
+        sum,
+        MatrixShape {
+            m: 16,
+            n: 16,
+            k: 16,
+        },
+    ) {
         return;
     }
 
