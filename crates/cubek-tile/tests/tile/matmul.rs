@@ -3793,6 +3793,97 @@ fn cmma_matmul_plane_partitioned_stage_bounces_where_it_overhangs() {
     assert_matmul_arange(&client, c.handle(), m, n, k);
 }
 
+/// [`cmma_matmul_plane_partitioned_stage_bounces_where_it_overhangs`] at `16×16×16` `f16`
+/// fragments summed in `f32`, the shape CUDA's tensor cores offer: a `24×24` output its four
+/// planes' fragments overhang along `M`, `N` or both. Tensor-core only.
+#[test]
+fn cmma_matmul_plane_partitioned_stage_overhangs_at_f16_fragments() {
+    let client = cubecl::test_device().client();
+    let (operands, sum) = (f16::elem_type_native(), f32::elem_type_native());
+    let offered = client.properties().features.matmul.cmma.iter().any(|cfg| {
+        cfg.a_type == operands
+            && cfg.b_type == operands
+            && cfg.cd_type == sum
+            && (cfg.m, cfg.n, cfg.k) == (16, 16, 16)
+    });
+    if !offered {
+        TestOutcome::Validated(ValidationResult::Skipped(
+            "device has no 16x16x16 f16 cmma fragment summed in f32".to_string(),
+        ))
+        .enforce();
+        return;
+    }
+
+    let (m, n, k, edge) = (24usize, 24usize, 32usize, 16usize);
+    let launcher = implied(
+        &client,
+        Partitioning::new(
+            Space::new(&[(M, m), (N, n), (K, k)]),
+            Levels::leaf(&[(M, edge), (N, edge), (K, edge)])
+                .planes(&[(M, m.div_ceil(edge)), (N, n.div_ceil(edge))])
+                .walk_every(&[M, N, K])
+                .build(),
+        ),
+        Form::Static,
+    );
+
+    // Small integers, exact in `f16`.
+    let lhs: Vec<f32> = (0..m * k).map(|i| (i % 7) as f32 - 3.0).collect();
+    let rhs: Vec<f32> = (0..k * n).map(|i| (i % 5) as f32 - 2.0).collect();
+    let expected: Vec<f32> = (0..m * n)
+        .map(|idx| {
+            let (i, j) = (idx / n, idx % n);
+            (0..k).map(|p| lhs[i * k + p] * rhs[p * n + j]).sum()
+        })
+        .collect();
+    let (a, _) = TestInput::builder(client.clone(), shape![m, k])
+        .dtype(operands)
+        .custom(lhs)
+        .generate_with_f32_host_data();
+    let (b, _) = TestInput::builder(client.clone(), shape![k, n])
+        .dtype(operands)
+        .custom(rhs)
+        .generate_with_f32_host_data();
+    // Poisoned, not zeroed: the kernel zeroes the accumulator fragment, and a cell past the edge
+    // written through would land on a cell of the next row.
+    let (c, _) = TestInput::builder(client.clone(), shape![m, n])
+        .uniform(4242, 10., 100.)
+        .generate_with_f32_host_data();
+    let bind = |handle: &TensorHandle, element, axes: &[Axis]| {
+        launcher
+            .arg(handle.clone().binding(), element)
+            .axes(axes)
+            .build()
+            .unwrap()
+    };
+    let (a_op, b_op, c_op) = (
+        bind(&a, operands, &[M, K]),
+        bind(&b, operands, &[K, N]),
+        bind(&c, sum, &[M, N]),
+    );
+
+    cmma_matmul_two_levels_planes::launch(
+        &client,
+        launcher.cube_count(),
+        launcher.cube_dim(),
+        a_op.arg(),
+        b_op.arg(),
+        c_op.arg(),
+        launcher.partitioning_arg(),
+        launcher.partitioning().level(0),
+        launcher.partitioning().level(1),
+        2,
+        sum,
+    );
+    let output = HostData::from_tensor_handle(&client, c, HostDataType::F32);
+    let (_, expected) = TestInput::builder(client, shape![m, n])
+        .custom(expected)
+        .generate_with_f32_host_data();
+    assert_equals_approx(&output, &expected, 1e-3)
+        .as_test_outcome()
+        .enforce()
+}
+
 /// The multi-fragment partition: each of the 4 planes owns a 2×2 partition of 8³ fragments,
 /// resident across a double-buffered K walk; the fragment level reads the stage where it lies, so
 /// the unrolled walk reloads operand fragments per execute (no restaging). Tensor-core only.
