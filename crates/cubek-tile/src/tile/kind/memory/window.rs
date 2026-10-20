@@ -69,34 +69,57 @@ impl Window {
     /// The scalar physical-axis check behind [`axes_in_bounds`](Self::axes_in_bounds).
     pub(crate) fn axis_in_bounds(&self, pos: u32, #[comptime] axis: usize) -> bool {
         if comptime!(self.boundaries.get(axis).copied().flatten() == Some(Boundary::Zero)) {
-            let abs = self.origin.at(axis).plus(pos.cast::<i32>());
-            if comptime!(self.signed) {
-                abs >= 0i32 && abs.cast::<u32>() < self.bound.at(axis)
-            } else {
-                abs.cast::<u32>() < self.bound.at(axis)
-            }
+            self.lands(pos, axis)
         } else {
             true.runtime()
         }
     }
 
-    /// Whether the window lies wholly inside its bound on every axis it bounds, so no read of it
-    /// masks.
+    /// Whether the window lies wholly inside its bound on every axis, so no read of it masks or
+    /// clamps.
+    ///
+    /// Every axis, as [`Self::holds`] checks: a window opened at a box larger than its buffer
+    /// leaves it along an axis that names no boundary.
     #[allow(clippy::needless_range_loop)] // `#[unroll]` requires a range loop.
     pub(crate) fn fits(&self) -> bool {
         let mut fits = true;
         #[unroll]
-        for i in 0..comptime!(self.boundaries.len()) {
-            if comptime!(self.boundaries[i].is_some()) {
-                let origin = self.origin.at(i);
-                let end = origin.plus(self.extent.at(i).cast::<i32>());
-                fits = fits && end.cast::<u32>() <= self.bound.at(i);
-                if comptime!(self.signed) {
-                    fits = fits && origin >= 0i32;
-                }
+        for i in 0..self.origin.len() {
+            let origin = self.origin.at(i);
+            let end = origin.plus(self.extent.at(i).cast::<i32>());
+            fits = fits && end.cast::<u32>() <= self.bound.at(i);
+            if comptime!(self.signed) {
+                fits = fits && origin >= 0i32;
             }
         }
         fits
+    }
+
+    /// Whether `pos` lands inside the buffer on every axis a read does not clamp onto its edge.
+    ///
+    /// Every axis, not only those the window names a [`Boundary::Zero`] on: a window opened at a
+    /// box larger than its buffer, as a fragment taller than the rows it is drained into, leaves
+    /// the buffer along an axis that names none.
+    #[allow(clippy::needless_range_loop)] // `#[unroll]` requires a range loop.
+    pub(crate) fn holds(&self, pos: &CoordsDyn) -> bool {
+        let mut valid = true;
+        #[unroll]
+        for i in 0..self.origin.len() {
+            if comptime!(self.boundaries.get(i).copied().flatten() != Some(Boundary::Clamp)) {
+                valid = valid && self.lands(pos[i], i);
+            }
+        }
+        valid
+    }
+
+    /// Whether `pos` along `axis` lands inside the buffer.
+    fn lands(&self, pos: u32, #[comptime] axis: usize) -> bool {
+        let abs = self.origin.at(axis).plus(pos.cast::<i32>());
+        if comptime!(self.signed) {
+            abs >= 0i32 && abs.cast::<u32>() < self.bound.at(axis)
+        } else {
+            abs.cast::<u32>() < self.bound.at(axis)
+        }
     }
 
     /// This window under `guard`: [`Guard::Proved`] drops clamping and [`Boundary`] modes.
@@ -110,6 +133,24 @@ impl Window {
                 Guard::Checked => self.boundaries.clone(),
                 Guard::Proved => SmallVec::new(),
             }),
+        }
+    }
+
+    /// This window addressing as a read that zeroes past the edge must: every axis clamps onto
+    /// the edge cell, so the address stays in the buffer whatever the read keeps. Every axis, as
+    /// [`holds`](Self::holds) checks every axis.
+    #[allow(
+        dead_code,
+        reason = "called through its expansion, by `WindowedView`'s reads"
+    )]
+    pub(crate) fn edge_clamped(self) -> Window {
+        let rank = self.origin.len();
+        Window {
+            origin: self.origin,
+            extent: self.extent,
+            bound: self.bound,
+            signed: comptime!(self.signed),
+            boundaries: comptime!(SmallVec::from_elem(Some(Boundary::Clamp), rank)),
         }
     }
 }
@@ -219,9 +260,6 @@ impl Layout for Window {
     }
 
     fn is_in_bounds(&self, pos: Self::Coordinates) -> bool {
-        self.axes_in_bounds(
-            &pos,
-            comptime!((0..self.boundaries.len()).collect::<Vec<_>>()),
-        )
+        self.holds(&pos)
     }
 }
