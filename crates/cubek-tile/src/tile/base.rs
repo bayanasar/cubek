@@ -1307,7 +1307,7 @@ impl TileExpand {
         }
         let (inner, outer) = self.factor.split_on(scope, &space);
         let mut values = self.clone();
-        values.factor = inner;
+        values.factor = inner.read_by(instruction);
         (values, outer)
     }
 
@@ -1496,6 +1496,13 @@ impl Tile {
         coords: &Coords<u32>,
         #[comptime] values: Space,
     ) -> S {
+        let own = self.scale_coords(coords, values);
+        self.scale_at::<S>(&own)
+    }
+
+    /// This scale tile's coordinates of the value at `coords` of a tile spanning `values`: each of
+    /// its axes the values span read off them, every other at its origin.
+    fn scale_coords(&self, coords: &Coords<u32>, #[comptime] values: Space) -> Coords<u32> {
         let rank = comptime!(self.place.space.rank());
         let projection = self.projection();
         let mut own = Coords::<u32>::new();
@@ -1513,7 +1520,7 @@ impl Tile {
                 own.push(0u32);
             }
         }
-        self.scale_at::<S>(&own)
+        own
     }
 
     /// The one value at `coords` of a tile that serves lines: the load holding it, read whole,
@@ -1523,20 +1530,10 @@ impl Tile {
     fn value_in_line<S: Numeric>(&self, coords: &Coords<u32>) -> S {
         let define!(Served) = self.element;
         let space = comptime!(self.place.space.clone());
-        let rank = comptime!(space.rank());
         let load = self.vector_tile();
         let width = comptime!(load.values());
         let packing = self.packing();
-        let mut position = 0u32.runtime();
-        #[unroll]
-        for p in 0..rank {
-            let axis = comptime!(space.axis_at(p));
-            let extent = comptime!(load.extent_along(axis) as u32);
-            if comptime!(extent > 1) {
-                let step = comptime!(load.step_along(axis) as u32);
-                position += coords.at(p).remainder(extent).times(step);
-            }
-        }
+        let position = self.place_in_line(coords);
         match comptime!(packing) {
             Packing::Plain => {
                 let size!(W) = width;
@@ -1553,18 +1550,67 @@ impl Tile {
             Packing::Packed { field } => {
                 let (bits, per_word) =
                     comptime!((field.size_bits() as u32, field.per_word() as u32));
-                let words_wide = comptime!(packing.physical(width));
-                let size!(WP) = words_wide;
-                let words = self
-                    .nd_words::<WP>(comptime!(Guard::Checked))
-                    .read(load.index(coords, &space));
-                let word = if comptime!(words_wide > 1) {
-                    words.extract_dynamic((position / per_word).cast::<usize>())
-                } else {
-                    words.extract(0usize)
-                };
+                let word = self.word_in_line(coords, position);
                 let shifted = word >> ((position % per_word) * bits);
                 unpack_line::<S, Const<1>, Const<1>>(Vector::new(shifted), field).extract(0usize)
+            }
+        }
+    }
+
+    /// Where the value at `coords` sits in the load holding it, counted in values along every axis
+    /// the load spans.
+    fn place_in_line(&self, coords: &Coords<u32>) -> u32 {
+        let space = comptime!(self.place.space.clone());
+        let rank = comptime!(space.rank());
+        let load = self.vector_tile();
+        let mut position = 0u32.runtime();
+        #[unroll]
+        for p in 0..rank {
+            let axis = comptime!(space.axis_at(p));
+            let extent = comptime!(load.extent_along(axis) as u32);
+            if comptime!(extent > 1) {
+                let step = comptime!(load.step_along(axis) as u32);
+                position += coords.at(p).remainder(extent).times(step);
+            }
+        }
+        position
+    }
+
+    /// The stored word holding the value at `coords` of a packed tile, the value `position` into
+    /// the load holding it ([`place_in_line`](Self::place_in_line)).
+    fn word_in_line(&self, coords: &Coords<u32>, position: u32) -> u32 {
+        let space = comptime!(self.place.space.clone());
+        let load = self.vector_tile();
+        let packing = self.packing();
+        let per_word = comptime!(match packing {
+            Packing::Packed { field } => field.per_word() as u32,
+            Packing::Plain => panic!("Tile::word_in_line: a plain tile holds values, not words"),
+        });
+        let words_wide = comptime!(packing.physical(load.values()));
+        let size!(WP) = words_wide;
+        let words = self
+            .nd_words::<WP>(comptime!(Guard::Checked))
+            .read(load.index(coords, &space));
+        if comptime!(words_wide > 1) {
+            words.extract_dynamic((position / per_word).cast::<usize>())
+        } else {
+            words.extract(0usize)
+        }
+    }
+
+    /// The stored word holding the scale covering the value at `coords` of a tile spanning
+    /// `values`, read as it is stored: what the block-scaled instruction takes as its scale
+    /// register. A plain tile of words is read at the value's own coordinates; a packed one at
+    /// the word its field lies in.
+    #[allow(dead_code)] // Reached through its expand, from [`Factor`].
+    pub(crate) fn word_for(&self, coords: &Coords<u32>, #[comptime] values: Space) -> u32 {
+        let own = self.scale_coords(coords, values);
+        let packing = self.packing();
+        match comptime!(packing) {
+            Packing::Plain => self.scale_at::<u32>(&own),
+            Packing::Packed { .. } => {
+                let position = self.place_in_line(&own);
+                self.word_in_line(&own, position)
             }
         }
     }
