@@ -156,6 +156,15 @@ impl BufferLayout {
         }
     }
 
+    /// The page this layout's window is pinned at, 0 where the buffer is not a pool of pages.
+    pub(crate) fn pinned_page(&self) -> u32 {
+        #[comptime]
+        match &self.paging {
+            ComptimeOption::Some(table) => table.pinned_page(),
+            ComptimeOption::None => 0u32,
+        }
+    }
+
     /// `digits` located through the page table where the buffer is a pool of pages
     /// ([`PageTable::located`]), with the base the line's offset adds past them.
     fn paged(&self, digits: Coords<u32>) -> (Coords<u32>, u32) {

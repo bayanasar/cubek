@@ -461,6 +461,11 @@ impl Tile {
         }
     }
 
+    /// The page this tile's window is pinned at, 0 for a tile not read through a page table.
+    pub fn pinned_page(&self) -> u32 {
+        self.mem("pinned_page").layout.pinned_page()
+    }
+
     /// Window this tile down to `region`, no copy.
     pub fn at(&self, region: &Region) -> Tile {
         let skip = comptime!({

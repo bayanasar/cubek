@@ -382,6 +382,11 @@ impl PageTable {
         }
     }
 
+    /// The page this table is pinned at: the entry its window's cut read from the table.
+    pub(crate) fn pinned_page(&self) -> u32 {
+        self.pin_page
+    }
+
     /// This table, its pin unchanged, for a window whose origin is aligned to `origin_alignment`.
     fn aligned(&self, #[comptime] origin_alignment: usize) -> PageTable {
         PageTable {
