@@ -377,7 +377,7 @@ fn storage_of(
         .iter()
         .map(|&axis| (space.extent_raw(axis), kernel.is_dynamic(axis)))
         .collect();
-    let windows: SmallVec<[SmallVec<[(Extent, bool); Space::MAX_RANK]>; 8]> = launch
+    let windows: SmallVec<[_; 8]> = launch
         .partitioning()
         .levels()
         .iter()

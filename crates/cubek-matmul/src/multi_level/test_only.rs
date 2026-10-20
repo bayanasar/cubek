@@ -70,10 +70,9 @@ impl Display for TestStrategy {
     }
 }
 
-fn with_kind<RC, A>(sel: &BlueprintStrategy<A>, kind: TileMatmulKind) -> BlueprintStrategy<A>
+fn with_kind<A>(sel: &BlueprintStrategy<A>, kind: TileMatmulKind) -> BlueprintStrategy<A>
 where
-    RC: crate::multi_level::args::RuntimeConfig,
-    A: Routine<RC>,
+    A: Routine<()>,
     A::Strategy: TilingArgs,
 {
     let mut sel = sel.clone();
