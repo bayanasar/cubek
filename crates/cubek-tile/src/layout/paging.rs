@@ -13,7 +13,8 @@
 //!
 //! The table is read as each window is cut, not as each line is: a window pins the page its origin
 //! lies in, and one whose extent is a single sequence and at most a page of positions the next page
-//! too, its lines offset from the two pages' starts without touching the table.
+//! too, its lines offset from the two pages' starts without touching the table. A window proved
+//! inside one page pins it alone, and a window cut inside that one keeps the pin.
 
 use cubecl::prelude::*;
 
@@ -96,6 +97,66 @@ pub(crate) enum Spans {
     Any,
     /// One sequence and at most a page of positions: the pinned page, or the next.
     TwoPages,
+    /// One sequence inside the pinned page.
+    OnePage,
+}
+
+impl Spans {
+    /// What this proves of the same extent moved by a runtime amount, which loses the origin's
+    /// alignment.
+    fn shifted(self) -> Spans {
+        match self {
+            Spans::OnePage => Spans::TwoPages,
+            spans => spans,
+        }
+    }
+}
+
+/// A window's extent along the paged axes, `None` where no level fixes it, and what its origin is
+/// aligned to along the positions.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+struct PagedWindow {
+    sequences: Option<usize>,
+    positions: Option<usize>,
+    origin_alignment: usize,
+}
+
+impl PagedWindow {
+    /// What this window proves over pages of `page_size` positions: one page where its positions
+    /// fit in the alignment its origin and the pages share.
+    fn spans(&self, page_size: usize) -> Spans {
+        match (self.sequences, self.positions) {
+            (Some(1), Some(positions)) if positions <= gcd(self.origin_alignment, page_size) => {
+                Spans::OnePage
+            }
+            (Some(1), Some(positions)) if positions <= page_size => Spans::TwoPages,
+            _ => Spans::Any,
+        }
+    }
+}
+
+/// What a window cut from the one a table is pinned for does with that pin.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Pin {
+    /// The same pin: the window lies in the page this table pinned.
+    Kept,
+    /// Its own pin, for a window spanning pages as the variant says.
+    Resolved(Spans),
+}
+
+/// How a window was cut from the one before, which decides what it keeps of that one's pages.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum WindowCut {
+    /// The same origin and extent: handed to other units, or bounded short of its end.
+    Unmoved,
+    /// A level's tile, its extent along each dim in loads where the level fixes it; `nested` where
+    /// the window is paged and every tile lies inside the window it was cut from.
+    Level {
+        edges: Vec<Option<usize>>,
+        nested: bool,
+    },
+    /// Moved by a runtime amount: a `within` from a runtime start, or a gathered descent.
+    Shifted,
 }
 
 /// A page table as a kernel reads it: `u32`, `[sequences, pages_per_sequence]`, read by stride.
@@ -131,6 +192,10 @@ pub(crate) struct PageTable {
     /// What the window's extent proves of the pages its lines lie in.
     #[cube(comptime)]
     spans: Spans,
+    /// What the window's origin along the positions is aligned to, in positions: 0 for the origin
+    /// of the whole operand (aligned to everything), 1 where nothing is known.
+    #[cube(comptime)]
+    origin_alignment: usize,
     #[cube(comptime)]
     pub(crate) page_size: usize,
     /// The buffer dim the pages lie along.
@@ -194,44 +259,80 @@ impl PageTable {
             pin_base: 0u32,
             next_base: 0u32,
             spans: comptime!(Spans::Any),
+            origin_alignment: comptime!(0usize),
             page_size: comptime!(paging.page_size),
             sequence_dim,
             position_dim,
             unit,
         };
-        unpinned.pinned(0u32, 0u32, comptime!(Spans::Any))
+        unpinned.pinned(0u32, 0u32, comptime!(Spans::Any), comptime!(0usize))
     }
 
-    /// This table for the window whose origin is `origin` and whose extent along each dim, in
-    /// loads, is `edges` (`None` where the window's extent is the one this table was pinned for).
-    /// Every window is cut through here, so its pages are resolved once: where its extent is one
-    /// sequence and at most a page of positions, its lines lie in the page its origin does or the
-    /// next, both resolved now; elsewhere a line reads the table where it leaves the origin's.
+    /// This table for the window whose origin is `origin`, cut from the one this table was pinned
+    /// for as `cut` says. A window inside the one page of the window it was cut from keeps that
+    /// page; any other resolves its own.
     pub(crate) fn pinned_at(
         &self,
         origin: &Coords<i32>,
-        #[comptime] edges: Option<Vec<Option<usize>>>,
+        #[comptime] cut: WindowCut,
+        sequence_stride: u32,
+        position_stride: u32,
+    ) -> PageTable {
+        let origin_alignment = comptime!(match &cut {
+            WindowCut::Unmoved => self.origin_alignment,
+            WindowCut::Shifted => 1,
+            WindowCut::Level { edges, .. } => match edges[self.position_dim] {
+                Some(loads) => gcd(self.origin_alignment, loads * self.unit),
+                None => self.origin_alignment,
+            },
+        });
+        let pin = comptime!(match cut {
+            WindowCut::Unmoved => Pin::Kept,
+            WindowCut::Shifted => Pin::Resolved(self.spans.shifted()),
+            WindowCut::Level { nested: true, .. } if self.spans == Spans::OnePage => Pin::Kept,
+            WindowCut::Level { edges, .. } => Pin::Resolved(
+                PagedWindow {
+                    sequences: edges[self.sequence_dim],
+                    positions: edges[self.position_dim].map(|loads| loads * self.unit),
+                    origin_alignment,
+                }
+                .spans(self.page_size),
+            ),
+        });
+        match comptime!(pin) {
+            Pin::Kept => self.aligned(origin_alignment),
+            Pin::Resolved(spans) => self.repinned(
+                origin,
+                spans,
+                origin_alignment,
+                sequence_stride,
+                position_stride,
+            ),
+        }
+    }
+
+    /// This table pinned at the page `origin` lies in, for a window spanning pages as `spans` says.
+    fn repinned(
+        &self,
+        origin: &Coords<i32>,
+        #[comptime] spans: Spans,
+        #[comptime] origin_alignment: usize,
         sequence_stride: u32,
         position_stride: u32,
     ) -> PageTable {
         let page_size = comptime!(self.page_size as u32);
         let unit = comptime!(self.unit as u32);
-        let spans = comptime!(match edges {
-            None => self.spans,
-            Some(edges) => {
-                let positions = edges[self.position_dim].map(|loads| loads * self.unit);
-                match (edges[self.sequence_dim], positions) {
-                    (Some(1), Some(positions)) if positions <= self.page_size => Spans::TwoPages,
-                    _ => Spans::Any,
-                }
-            }
-        });
         let sequence = origin.at(comptime!(self.sequence_dim)).cast::<u32>();
         let position = origin
             .at(comptime!(self.position_dim))
             .cast::<u32>()
             .times(unit);
-        let mut table = self.pinned(sequence, position.divided_by(page_size), spans);
+        let mut table = self.pinned(
+            sequence,
+            position.divided_by(page_size),
+            spans,
+            origin_alignment,
+        );
         // Wrapping: a base is only ever added to the offset of a line past its column's start.
         let start = table.pin_start.divided_by(unit);
         let page_digits = comptime!((self.page_size / self.unit) as u32);
@@ -247,10 +348,16 @@ impl PageTable {
     }
 
     /// This table pinned at the page column `column` of sequence `sequence` lists.
-    fn pinned(&self, sequence: u32, column: u32, #[comptime] spans: Spans) -> PageTable {
+    fn pinned(
+        &self,
+        sequence: u32,
+        column: u32,
+        #[comptime] spans: Spans,
+        #[comptime] origin_alignment: usize,
+    ) -> PageTable {
         let next_page = match comptime!(spans) {
             Spans::TwoPages => self.lookup(sequence, column.plus(1u32)),
-            Spans::Any => 0u32,
+            Spans::Any | Spans::OnePage => 0u32,
         };
         PageTable {
             entries: self.entries.clone(),
@@ -267,6 +374,32 @@ impl PageTable {
             pin_base: 0u32,
             next_base: 0u32,
             spans,
+            origin_alignment,
+            page_size: comptime!(self.page_size),
+            sequence_dim: comptime!(self.sequence_dim),
+            position_dim: comptime!(self.position_dim),
+            unit: comptime!(self.unit),
+        }
+    }
+
+    /// This table, its pin unchanged, for a window whose origin is aligned to `origin_alignment`.
+    fn aligned(&self, #[comptime] origin_alignment: usize) -> PageTable {
+        PageTable {
+            entries: self.entries.clone(),
+            sequence_stride: self.sequence_stride,
+            page_stride: self.page_stride,
+            sequences: self.sequences,
+            pages_per_sequence: self.pages_per_sequence,
+            last_page: self.last_page,
+            pin_sequence: self.pin_sequence,
+            pin_column: self.pin_column,
+            pin_page: self.pin_page,
+            next_page: self.next_page,
+            pin_start: self.pin_start,
+            pin_base: self.pin_base,
+            next_base: self.next_base,
+            spans: comptime!(self.spans),
+            origin_alignment,
             page_size: comptime!(self.page_size),
             sequence_dim: comptime!(self.sequence_dim),
             position_dim: comptime!(self.position_dim),
@@ -279,24 +412,37 @@ impl PageTable {
     /// page's base; any other is resolved line by line.
     pub(crate) fn located(&self, digits: &Coords<u32>) -> (Coords<u32>, u32) {
         match comptime!(self.spans) {
+            Spans::OnePage => (self.pinned_digits(digits), self.pin_base),
             Spans::TwoPages => {
                 let page_size = comptime!(self.page_size as u32);
                 let unit = comptime!(self.unit as u32);
-                let position = digits.at(comptime!(self.position_dim)).times(unit);
+                let pinned_digits = self.pinned_digits(digits);
+                let position = pinned_digits.at(comptime!(self.position_dim)).times(unit);
                 let pinned = position.minus(self.pin_start) < page_size;
-                let mut kept = Coords::<u32>::new();
-                #[unroll]
-                for pa in 0..digits.len() {
-                    if comptime!(pa == self.sequence_dim) {
-                        kept.push(0u32);
-                    } else {
-                        kept.push(digits.at(pa));
-                    }
-                }
-                (kept, select(pinned, self.pin_base, self.next_base))
+                (pinned_digits, select(pinned, self.pin_base, self.next_base))
             }
             Spans::Any => (self.resolve(digits), 0u32),
         }
+    }
+
+    /// `digits` with the sequence's digit zeroed, since one sequence's lines are offset from their
+    /// pages' bases, and the position held at or past the pin's start: a checked read addresses a
+    /// line past the window's bound at the bound's edge, which may lie before the pinned page, and
+    /// drops what it reads there.
+    fn pinned_digits(&self, digits: &Coords<u32>) -> Coords<u32> {
+        let first = self.pin_start.divided_by(comptime!(self.unit as u32));
+        let mut pinned = Coords::<u32>::new();
+        #[unroll]
+        for pa in 0..digits.len() {
+            if comptime!(pa == self.sequence_dim) {
+                pinned.push(0u32);
+            } else if comptime!(pa == self.position_dim) {
+                pinned.push(digits.at(pa).max_with(first));
+            } else {
+                pinned.push(digits.at(pa));
+            }
+        }
+        pinned
     }
 
     /// The page column `column` of sequence `sequence` lists, clamped to the pool.
@@ -364,5 +510,46 @@ impl PageTable {
             }
         }
         resolved
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn window(sequences: usize, positions: usize, origin_alignment: usize) -> PagedWindow {
+        PagedWindow {
+            sequences: Some(sequences),
+            positions: Some(positions),
+            origin_alignment,
+        }
+    }
+
+    /// One page only where the alignment the origin and the pages share holds the whole extent:
+    /// a step of 16 from 0 or a multiple of 16 stays in a page of 64; from a multiple of 4, or as
+    /// 48 positions, it may cross into the next.
+    #[test]
+    fn a_window_is_inside_one_page_only_where_its_alignment_proves_it() {
+        assert_eq!(window(1, 16, 0).spans(64), Spans::OnePage);
+        assert_eq!(window(1, 16, 16).spans(64), Spans::OnePage);
+        assert_eq!(window(1, 64, 128).spans(64), Spans::OnePage);
+        assert_eq!(window(1, 16, 4).spans(64), Spans::TwoPages);
+        assert_eq!(window(1, 48, 48).spans(64), Spans::TwoPages);
+        assert_eq!(window(1, 128, 0).spans(64), Spans::Any);
+        assert_eq!(window(2, 4, 0).spans(64), Spans::Any);
+        let unfixed = PagedWindow {
+            sequences: Some(1),
+            positions: None,
+            origin_alignment: 0,
+        };
+        assert_eq!(unfixed.spans(64), Spans::Any);
+    }
+
+    /// A runtime shift keeps the extent, so at most two pages, but loses the alignment.
+    #[test]
+    fn a_shifted_window_keeps_its_extent_not_its_page() {
+        assert_eq!(Spans::OnePage.shifted(), Spans::TwoPages);
+        assert_eq!(Spans::TwoPages.shifted(), Spans::TwoPages);
+        assert_eq!(Spans::Any.shifted(), Spans::Any);
     }
 }

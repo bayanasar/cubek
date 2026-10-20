@@ -664,9 +664,9 @@ impl Memory {
         let start = self
             .window_start
             .plus(advances.sum(comptime!((0..rank).collect::<Vec<_>>())));
-        // The window's extent along each dim in loads where the level fixes it, which only a pool
-        // of pages reads; it is direct, so these are the edges `direct_descent` cut.
-        let edges = comptime!(match self.layout.paging.is_some() {
+        // The window's extent along each dim in loads where the level fixes it; it is direct, so
+        // these are the edges `direct_descent` cut.
+        let edges = comptime!(match self.projection.is_direct() {
             true => {
                 let width = self.store.vector_size;
                 let load = VectorTile::new(
@@ -691,6 +691,28 @@ impl Memory {
             }
             false => None,
         });
+        let cut = comptime!(match edges {
+            None => {
+                assert!(
+                    self.layout.paging.is_none(),
+                    "Memory::at: a pool of pages is read through a direct mapping only"
+                );
+                // A gathered origin moves by runtime amounts.
+                WindowCut::Shifted
+            }
+            Some(edges) => {
+                // `space` is the box being cut: a level that does not overhang it keeps its tiles
+                // inside it.
+                let nested = self.layout.paging.is_some()
+                    && (0..rank).all(|p| {
+                        let axis = space.axis_at(p);
+                        edges[p].is_none()
+                            || (matches!(space.extent_raw(axis), Extent::Static(_))
+                                && !step.level.overhangs(&space, axis))
+                    });
+                WindowCut::Level { edges, nested }
+            }
+        });
 
         self.moved_to(
             Window::new(
@@ -700,7 +722,7 @@ impl Memory {
                 comptime!(self.window.signed),
                 comptime!(self.window.boundaries.clone()),
             ),
-            comptime!(edges),
+            comptime!(cut),
             start,
             map,
             // No longer covers the buffer, so no straight-through fill.
@@ -813,13 +835,12 @@ impl Memory {
     }
 
     /// This store looking at `window` from line `window_start` on; buffer unchanged, and the layout
-    /// pinned at the window where it reads a pool of pages. `edges` is the window's extent along
-    /// each dim in loads where a level fixes it, `None` where the extent is the one before.
+    /// pinned at the window where it reads a pool of pages, cut from this one as `cut` says.
     #[allow(clippy::too_many_arguments)]
     fn moved_to(
         &self,
         window: Window,
-        #[comptime] edges: Option<Vec<Option<usize>>>,
+        #[comptime] cut: WindowCut,
         window_start: u32,
         map: RuntimeMap,
         #[comptime] access: Access,
@@ -829,7 +850,7 @@ impl Memory {
         Memory {
             address: comptime!(self.address),
             store: self.store.clone(),
-            layout: self.layout.pinned_at(&window.origin, edges),
+            layout: self.layout.pinned_at(&window.origin, cut),
             window,
             projection: comptime!(self.projection.clone()),
             source_window: self.source_window.clone(),
@@ -852,7 +873,7 @@ impl Memory {
         let fill = comptime!(self.access.fill.held_by(holder));
         self.moved_to(
             self.window.clone(),
-            comptime!(None),
+            comptime!(WindowCut::Unmoved),
             self.window_start,
             self.map.clone(),
             comptime!(Access {
@@ -905,7 +926,7 @@ impl Memory {
                 comptime!(self.window.signed),
                 comptime!(self.window.boundaries.clone()),
             ),
-            comptime!(None),
+            comptime!(WindowCut::Shifted),
             start,
             self.map.clone(),
             comptime!(Access {
@@ -926,8 +947,11 @@ impl Memory {
         out
     }
 
-    /// This window placed at element `from` on `axis`, reading up to `until` (zero past it).
+    /// This window placed at element `from` on `axis`, reading up to `until` (zero past it). A
+    /// `from` known at expansion to be 0 keeps the window's pages.
     pub(crate) fn within(&self, #[comptime] axis: Axis, from: usize, until: usize) -> Memory {
+        let first = from.constant();
+        let moved = comptime!(first != Some(0));
         let proj = comptime!(self.projection.clone());
         comptime!(assert!(
             proj.untiled().is_direct() && !proj.is_tiled(),
@@ -972,7 +996,10 @@ impl Memory {
                     boundaries
                 }),
             ),
-            comptime!(None),
+            comptime!(match moved {
+                true => WindowCut::Shifted,
+                false => WindowCut::Unmoved,
+            }),
             start,
             self.map.clone(),
             // `until` is a runtime bound, so the window masks from here down.
