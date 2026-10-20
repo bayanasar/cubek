@@ -402,6 +402,9 @@ pub(crate) enum Overhang {
     Fits,
     /// Reads/writes past `bound` are masked per the window's [`Boundary`].
     Masked,
+    /// Masked past a run's end ([`Memory::within`]): a fill tests its window against that end
+    /// once, and reads a window wholly inside the run unchecked.
+    Run,
 }
 
 /// Boundary handling mode for out-of-bounds reads/writes, carried by `Window`.
@@ -416,7 +419,7 @@ pub enum Boundary {
 impl Overhang {
     /// The flag a [`Masked`] is built with.
     pub(crate) fn masks(&self) -> bool {
-        matches!(self, Overhang::Masked)
+        matches!(self, Overhang::Masked | Overhang::Run)
     }
 }
 

@@ -80,6 +80,25 @@ impl Window {
         }
     }
 
+    /// Whether the window lies wholly inside its bound on every axis it bounds, so no read of it
+    /// masks.
+    #[allow(clippy::needless_range_loop)] // `#[unroll]` requires a range loop.
+    pub(crate) fn fits(&self) -> bool {
+        let mut fits = true;
+        #[unroll]
+        for i in 0..comptime!(self.boundaries.len()) {
+            if comptime!(self.boundaries[i].is_some()) {
+                let origin = self.origin.at(i);
+                let end = origin.plus(self.extent.at(i).cast::<i32>());
+                fits = fits && end.cast::<u32>() <= self.bound.at(i);
+                if comptime!(self.signed) {
+                    fits = fits && origin >= 0i32;
+                }
+            }
+        }
+        fits
+    }
+
     /// This window under `guard`: [`Guard::Proved`] drops clamping and [`Boundary`] modes.
     pub(crate) fn with_guard(self, #[comptime] guard: Guard) -> Window {
         Window {

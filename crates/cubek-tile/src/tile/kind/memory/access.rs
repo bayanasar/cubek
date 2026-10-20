@@ -917,6 +917,15 @@ impl Memory {
         )
     }
 
+    /// This window read under `overhang`, once a fill has tested where it lies in its run.
+    pub(crate) fn with_overhang(&self, #[comptime] overhang: Overhang) -> Memory {
+        let mut out = self.clone();
+        comptime!({
+            out.access.overhang = overhang;
+        });
+        out
+    }
+
     /// This window placed at element `from` on `axis`, reading up to `until` (zero past it).
     pub(crate) fn within(&self, #[comptime] axis: Axis, from: usize, until: usize) -> Memory {
         let proj = comptime!(self.projection.clone());
@@ -969,7 +978,7 @@ impl Memory {
             // `until` is a runtime bound, so the window masks from here down.
             comptime!(Access {
                 whole: false,
-                overhang: Overhang::Masked,
+                overhang: Overhang::Run,
                 write: self.access.write,
                 fill: self.access.fill,
                 storage: self.access.storage,

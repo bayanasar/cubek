@@ -90,28 +90,39 @@ impl Memory {
         #[comptime] space: Space,
         fetched: &mut Array<Vector<T, W>>,
     ) {
-        self.refuse_unfetchable(src);
-        let w = comptime!(self.store.vector_size);
-        let fetched_width = W::value();
-        comptime!(assert_eq!(
-            fetched_width, w,
-            "Memory::fetch_straight: registers of one width fetch a stage of another"
-        ));
-        let check = comptime!(src.access.overhang.masks());
-        comptime!(fill_extent(&space, w, w, check));
-        let layout = self.layout.clone();
-        let lines = self.unit_lines();
-        let total = self.stage_lines();
-        let s = Masked::new(
-            src.window_view_storage::<T, W>(comptime!(Guard::Checked)),
-            check,
-        );
-        #[unroll]
-        for t in 0..comptime!(lines.tasks()) {
-            let i = task_line(t, comptime!(lines));
-            if in_stage(i, total, t, comptime!(lines)) {
-                fetched[t] =
-                    read_stage_line::<T, W, W>(&s, &layout.line_coords(i), comptime!(None));
+        // As in `fill_from`: only the stage that crosses a run's end masks.
+        if comptime!(src.access.overhang == Overhang::Run) {
+            if src.window.fits() {
+                let fitted = src.with_overhang(comptime!(Overhang::Fits));
+                self.fetch_straight::<T, W>(&fitted, comptime!(space.clone()), fetched);
+            } else {
+                let masked = src.with_overhang(comptime!(Overhang::Masked));
+                self.fetch_straight::<T, W>(&masked, comptime!(space.clone()), fetched);
+            }
+        } else {
+            self.refuse_unfetchable(src);
+            let w = comptime!(self.store.vector_size);
+            let fetched_width = W::value();
+            comptime!(assert_eq!(
+                fetched_width, w,
+                "Memory::fetch_straight: registers of one width fetch a stage of another"
+            ));
+            let check = comptime!(src.access.overhang.masks());
+            comptime!(fill_extent(&space, w, w, check));
+            let layout = self.layout.clone();
+            let lines = self.unit_lines();
+            let total = self.stage_lines();
+            let s = Masked::new(
+                src.window_view_storage::<T, W>(comptime!(Guard::Checked)),
+                check,
+            );
+            #[unroll]
+            for t in 0..comptime!(lines.tasks()) {
+                let i = task_line(t, comptime!(lines));
+                if in_stage(i, total, t, comptime!(lines)) {
+                    fetched[t] =
+                        read_stage_line::<T, W, W>(&s, &layout.line_coords(i), comptime!(None));
+                }
             }
         }
     }

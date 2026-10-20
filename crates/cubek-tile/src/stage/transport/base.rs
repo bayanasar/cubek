@@ -125,48 +125,66 @@ impl Memory {
     /// The caller must `sync_cube`, or `sync_plane` for a stage a plane owns, between this fill
     /// and its readers.
     pub(crate) fn fill_from<T: Numeric>(&mut self, src: &Memory, #[comptime] space: Space) {
-        let size!(W) = comptime!(self.store.vector_size);
-        // A gathered stage records where it read from: nothing in the staged window says which
-        // taps took the boundary value.
-        #[comptime]
-        match &mut self.source_window {
-            ComptimeOption::Some(source) => {
-                source.origin = src.window.origin.clone();
-                source.bound = src.window.bound.clone();
+        // A run masks only the stage that crosses its end: one wholly inside it reads unchecked.
+        // The window is the filling cube's (or plane's), so all its units take the same branch.
+        if comptime!(src.access.overhang == Overhang::Run) {
+            if src.window.fits() {
+                self.fill_from::<T>(
+                    &src.with_overhang(comptime!(Overhang::Fits)),
+                    comptime!(space.clone()),
+                );
+            } else {
+                self.fill_from::<T>(
+                    &src.with_overhang(comptime!(Overhang::Masked)),
+                    comptime!(space.clone()),
+                );
             }
-            ComptimeOption::None => {}
-        }
-        let addressed = self.store.has_address();
-        let src_addressed = src.store.has_address();
-        let transport = comptime!(TransportKind::new(
-            StoreForm {
-                packing: self.store.packing,
-                width: self.store.vector_size,
-                gathered: !self.projection.is_direct(),
-                overlaps: self.projection.composition() == Composition::Overlapping,
-                masks: self.access.overhang.masks(),
-                addressed,
-                delivery: self.access.delivery,
-            },
-            StoreForm {
-                packing: src.store.packing,
-                width: src.store.vector_size,
-                gathered: !src.projection.is_direct(),
-                overlaps: src.projection.composition() == Composition::Overlapping,
-                masks: src.access.overhang.masks(),
-                addressed: src_addressed,
-                delivery: src.access.delivery,
-            },
-            &self.access,
-            &space
-        ));
-        match comptime!(transport) {
-            TransportKind::Packed => {
-                let size!(WP) = comptime!(self.store.packing.physical(self.store.vector_size));
-                self.fill_straight::<u32, WP>(src, comptime!(space.clone()));
+        } else {
+            let size!(W) = comptime!(self.store.vector_size);
+            // A gathered stage records where it read from: nothing in the staged window says which
+            // taps took the boundary value.
+            #[comptime]
+            match &mut self.source_window {
+                ComptimeOption::Some(source) => {
+                    source.origin = src.window.origin.clone();
+                    source.bound = src.window.bound.clone();
+                }
+                ComptimeOption::None => {}
             }
-            TransportKind::Straight => self.fill_straight::<T, W>(src, comptime!(space.clone())),
-            TransportKind::Scanned(scan) => self.fill_scanned::<T, W>(src, comptime!(scan)),
+            let addressed = self.store.has_address();
+            let src_addressed = src.store.has_address();
+            let transport = comptime!(TransportKind::new(
+                StoreForm {
+                    packing: self.store.packing,
+                    width: self.store.vector_size,
+                    gathered: !self.projection.is_direct(),
+                    overlaps: self.projection.composition() == Composition::Overlapping,
+                    masks: self.access.overhang.masks(),
+                    addressed,
+                    delivery: self.access.delivery,
+                },
+                StoreForm {
+                    packing: src.store.packing,
+                    width: src.store.vector_size,
+                    gathered: !src.projection.is_direct(),
+                    overlaps: src.projection.composition() == Composition::Overlapping,
+                    masks: src.access.overhang.masks(),
+                    addressed: src_addressed,
+                    delivery: src.access.delivery,
+                },
+                &self.access,
+                &space
+            ));
+            match comptime!(transport) {
+                TransportKind::Packed => {
+                    let size!(WP) = comptime!(self.store.packing.physical(self.store.vector_size));
+                    self.fill_straight::<u32, WP>(src, comptime!(space.clone()));
+                }
+                TransportKind::Straight => {
+                    self.fill_straight::<T, W>(src, comptime!(space.clone()))
+                }
+                TransportKind::Scanned(scan) => self.fill_scanned::<T, W>(src, comptime!(scan)),
+            }
         }
     }
 }
