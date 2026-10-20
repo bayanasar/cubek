@@ -68,14 +68,18 @@ impl Boundaries {
         };
         let coords = projection.untiled();
 
-        // Whether coordinate axis `pa` is in bounds by construction; only an identity map can be.
-        let settled = |pa: usize| match coords.physical_axis(pa).identity_axis() {
-            Some(axis) => {
-                concrete.contains(axis)
-                    && !overhangs.contains(&axis)
-                    && !table_bounded.contains(&axis)
-            }
-            None => false,
+        // Whether coordinate axis `pa` is in bounds by construction: it counts concrete axes in
+        // mixed radix (one at coefficient `1` the simplest case), none of which the tiles reach
+        // past or a table bounds, so it covers exactly the extent their product states.
+        let settled = |pa: usize| {
+            coords
+                .physical_axis(pa)
+                .digits(concrete)
+                .is_some_and(|digits| {
+                    digits
+                        .iter()
+                        .all(|axis| !overhangs.contains(axis) && !table_bounded.contains(axis))
+                })
         };
         // A table's extent is whole pages, each whole lines: a line never straddles its edge.
         let whole_lines = |pa: usize| {
