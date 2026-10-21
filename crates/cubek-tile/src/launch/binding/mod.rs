@@ -3,6 +3,7 @@
 
 pub(crate) mod base;
 pub(crate) mod boundaries;
+pub(crate) mod derivation;
 pub(crate) mod labels;
 
 pub use base::{Arg, Bound, Labelled, Unbound, Unlabelled};
