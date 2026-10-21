@@ -8,3 +8,5 @@ nd = "nd"
 pn = "pn"
 # Unsigned exponent float formats: `QuantParam::UE8M0`, `UE4M3`.
 UE = "UE"
+# Input coordinates along y: `iy`, beside `ix`, in the depthwise and interpolate kernels.
+iy = "iy"
