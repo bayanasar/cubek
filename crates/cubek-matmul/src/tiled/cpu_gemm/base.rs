@@ -45,18 +45,6 @@ const L1_BYTES: usize = 32 * 1024;
 /// ~24 of 32 NEON q-registers (~12 of 16 AVX2 ymm), leaving room for the A/B operands.
 const ACC_REG_BYTES: usize = 384;
 
-/// The largest divisor of `k` not exceeding `cap` (≥1).
-fn divisor_at_most(k: usize, cap: usize) -> usize {
-    let cap = cap.clamp(1, k.max(1));
-    let mut best = 1;
-    for d in 1..=cap {
-        if k.is_multiple_of(d) {
-            best = d;
-        }
-    }
-    best
-}
-
 /// The largest divisor of `k` not exceeding `cap` that is a whole number of `align`-wide vectors,
 /// or [`divisor_at_most`] where `k` has none.
 fn aligned_divisor_at_most(k: usize, cap: usize, align: usize) -> usize {
