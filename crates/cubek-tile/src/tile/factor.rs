@@ -25,8 +25,7 @@ pub struct FactorExpand {
     // `Arc`: a tile holds its scale, and the scale is a tile.
     scale: Option<Arc<TileExpand>>,
     /// Whether the instruction these values meet reads their innermost scales as they are stored
-    /// ([`read_by`](FactorExpand::read_by)): the block-scaled one reads a word of packed `e4m3`
-    /// block scales as its scale register, where every other reader takes them as numbers.
+    /// ([`Instruction::reads_scales_as_stored`]).
     stored: bool,
 }
 
@@ -71,7 +70,7 @@ impl Factor {
         unexpanded!()
     }
 
-    /// Whether the innermost scales are [words](FactorExpand::holds_words) of block scales.
+    /// Whether the innermost scales are [words](FactorExpand::words) of block scales.
     pub(crate) fn holds_words(&self) -> comptime_type!(bool) {
         unexpanded!()
     }
@@ -110,17 +109,11 @@ impl FactorExpand {
         }
     }
 
-    /// This factor as `instruction` reads it: the block-scaled instruction takes its innermost
-    /// scales as they are stored, packed `e4m3` fields included, so they are staged beside the
-    /// values rather than decoded into them.
+    /// This factor as `instruction` reads it: one that reads its innermost scales as they are
+    /// stored, packed `e4m3` fields included, has them staged beside the values rather than
+    /// decoded into them.
     pub(crate) fn read_by(mut self, instruction: Instruction) -> Self {
-        self.stored = matches!(
-            instruction,
-            Instruction::Mma {
-                operands: MmaOperands::BlockScaled,
-                ..
-            }
-        );
+        self.stored = instruction.reads_scales_as_stored();
         self
     }
 
@@ -261,13 +254,13 @@ impl FactorExpand {
         coords: &CoordsExpand<u32>,
         values: Space,
     ) -> NativeExpand<f32> {
+        assert!(
+            self.words(scope).is_none(),
+            "Factor: these scales are words of four e4m3 block scales, which only the \
+             block-scaled instruction reads; widened one at a time they mean nothing"
+        );
         let mut product: Option<NativeExpand<f32>> = None;
         for scale in self.chain() {
-            assert!(
-                !holds_words(scope, scale, false),
-                "Factor: these scales are words of four e4m3 block scales, which only the \
-                 block-scaled instruction reads; widened one at a time they mean nothing"
-            );
             let one = scale_for(scope, scale, coords, &values);
             product = Some(match product {
                 None => one,
@@ -312,9 +305,26 @@ impl FactorExpand {
     /// them: words of block scales, which only the block-scaled instruction reads, so values
     /// under them are staged as they are stored.
     pub(crate) fn staged_beside(&self, scope: &Scope) -> bool {
-        self.scale
-            .as_deref()
-            .is_some_and(|scale| holds_words(scope, scale, self.stored))
+        self.words(scope).is_some()
+    }
+
+    /// The innermost scale tile where it holds words rather than scales: each `u32` the `e4m3`
+    /// scales of the four blocks one block-scaled instruction step covers, the first block's in
+    /// the low byte, as an NVFP4 checkpoint packs them. Only that instruction reads such scales
+    /// ([`word_at`](Factor::word_at)); widened to a scale one means nothing. Bound plain, they
+    /// are words for every reader; packed as `e4m3` fields, four a word, they are words only
+    /// where the instruction reads them as stored, and fields read as scales for every other.
+    fn words(&self, scope: &Scope) -> Option<&TileExpand> {
+        let scale = self.scale.as_deref()?;
+        let e4m3_words = Packing::Packed {
+            field: Field::of_float(FloatKind::E4M3),
+        };
+        let words = scale.element == u32::elem_type(scope)
+            && match scale.__expand_packing_method(scope) {
+                Packing::Plain => true,
+                packing => self.stored && packing == e4m3_words,
+            };
+        words.then_some(scale)
     }
 
     /// The scale tile staged beside the values, which are under it alone.
@@ -369,32 +379,11 @@ impl FactorExpand {
         coords: &CoordsExpand<u32>,
         values: Space,
     ) -> NativeExpand<u32> {
-        let scale = self
-            .scale
-            .as_deref()
-            .filter(|scale| holds_words(scope, scale, self.stored))
-            .expect("Factor::word_at: the innermost scales are no words of block scales");
-        scale
+        self.words(scope)
+            .expect("Factor::word_at: the innermost scales are no words of block scales")
             .clone()
             .__expand_word_for_method(scope, coords, values)
     }
-}
-
-/// Whether `scale` holds words rather than scales: each `u32` the `e4m3` scales of the four blocks
-/// one block-scaled instruction step covers, the first block's in the low byte, as an NVFP4
-/// checkpoint packs them. Only that instruction reads such scales
-/// ([`FactorExpand::__expand_word_at_method`]); widened to a scale one means nothing. Bound plain,
-/// they are words for every reader; packed as `e4m3` fields, four a word, they are words only
-/// where the instruction reads them `stored`, and fields read as scales for every other.
-fn holds_words(scope: &Scope, scale: &TileExpand, stored: bool) -> bool {
-    let e4m3_words = Packing::Packed {
-        field: Field::of_float(FloatKind::E4M3),
-    };
-    scale.element == u32::elem_type(scope)
-        && match scale.__expand_packing_method(scope) {
-            Packing::Plain => true,
-            packing => stored && packing == e4m3_words,
-        }
 }
 
 /// The scale of `scale` covering the value at `coords` of a tile spanning `values`, widened to

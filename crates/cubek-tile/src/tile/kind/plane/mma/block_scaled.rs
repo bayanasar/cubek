@@ -212,8 +212,8 @@ pub(crate) fn load_block_scaled<NV: Size, NS: Size>(
     let (m, n, k) = comptime!(shape);
     let def = block_scaled_definition::<f32>(m, n, k);
     let space = comptime!(src.place.space.clone());
-    // The window's rows are the served axis, its columns the contraction, however many digits
-    // spell it: a block-split space states `k` as its blocks and the position inside one.
+    // The window's rows are the served axis, its columns the contraction, however many axes
+    // make it up: a block-split space states `k` as its blocks and the position inside one.
     let rows = comptime!(match ident {
         MatrixIdent::A => m,
         MatrixIdent::B => n,
@@ -345,7 +345,6 @@ fn load_block_scaled_ldmatrix<WP: Size, NV: Size>(
     let space = comptime!(src.place.space.clone());
     let load = src.vector_tile();
     let rank = comptime!(space.rank());
-    let row_run = comptime!(ldmatrix_row_run(&space, axes, line_words));
     // An `e2m1x2` holds two values; a register is one word.
     let per_register = def.vector_size(ident);
     let registers = def.vectors_per_lane(ident);
@@ -364,7 +363,15 @@ fn load_block_scaled_ldmatrix<WP: Size, NV: Size>(
     let mut run = CoordsDyn::new();
     #[unroll]
     for p in 0..rank {
-        run.push(comptime!(row_run[p]).runtime());
+        // One row of a matrix: sixteen bytes of words along `k`, the innermost axis in its lines.
+        let extent = comptime!({
+            let values = axes.col_run(&space, LDMATRIX_ROW_WORDS * E2M1_PER_WORD)[p];
+            match p == rank - 1 {
+                true => (values / (line_words * E2M1_PER_WORD)) as u32,
+                false => values as u32,
+            }
+        });
+        run.push(extent.runtime());
     }
     let row_slice = words.line_slice(load.index(&at, &space), run);
     let regs = def.load_matrix::<Vector<u32, WP>, Const<1>>(row_slice, ident, registers, false);
@@ -372,32 +379,6 @@ fn load_block_scaled_ldmatrix<WP: Size, NV: Size>(
     for i in 0..registers {
         values[i] = Vector::<e2m1x2, NV>::reinterpret(regs[i].extract(0usize));
     }
-}
-
-/// One row of an `ldmatrix` matrix as a run of the window, an extent a digit: sixteen bytes of
-/// words along `k`, taken from the contraction's innermost digit outwards, the innermost counted
-/// in its lines of `line_words` words. A block-split window holds two words a block, so the row
-/// spans two blocks of `KB` beside the whole of `KI`; a window stating `k` as one axis spans that
-/// axis alone.
-fn ldmatrix_row_run(space: &Space, axes: MatrixAxes, line_words: usize) -> Vec<u32> {
-    let rank = space.rank();
-    let mut run = vec![1u32; rank];
-    let mut values = LDMATRIX_ROW_WORDS * E2M1_PER_WORD;
-    for p in (axes.col_split..rank).rev() {
-        let taken = space.extent_at(p).min(values);
-        assert!(
-            values.is_multiple_of(taken),
-            "MmaData::load_block_scaled: an `ldmatrix` row is {} values along `k`, which the \
-             window's digits do not cover whole",
-            LDMATRIX_ROW_WORDS * E2M1_PER_WORD
-        );
-        run[p] = match p == rank - 1 {
-            true => (taken / (line_words * E2M1_PER_WORD)) as u32,
-            false => taken as u32,
-        };
-        values /= taken;
-    }
-    run
 }
 
 /// Whether the device offers `ldmatrix`, which moves 16-bit cells: words of `e2m1` values move as
