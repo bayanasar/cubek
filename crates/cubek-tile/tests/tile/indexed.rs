@@ -3,7 +3,7 @@
 //!
 //! The kernels here read no table and route no walk. Routed rows and grouped tiles are one kernel
 //! under two tables: the weights' expert is their own, read at the step that cuts the rows, one
-//! entry a row or one a tile of rows. Ragged runs are a plain fold over the run the activations
+//! entry a row or one a tile of rows. Ragged runs are a plain sum over the run the activations
 //! place themselves at.
 #![allow(non_snake_case)]
 
@@ -52,7 +52,7 @@ fn weights() -> Vec<f32> {
         .collect()
 }
 
-/// Each row against the slab `expert_of(m)` names, folded on the host; zeros where it names none.
+/// Each row against the slab `expert_of(m)` names, summed on the host; zeros where it names none.
 fn expected(expert_of: impl Fn(usize) -> usize, w: &[f32]) -> Vec<Vec<f32>> {
     let x = activations();
     (0..ROWS)
@@ -445,11 +445,12 @@ const P: Axis = Axis(1);
 const D: Axis = Axis(2);
 
 const GROUPS: usize = 4;
-const PACKED: usize = 10;
+/// Rows of every group, end to end, and rows past the last group's end.
+const PACKED: usize = 16;
 /// Rows in blocks of four: groups start and end off a block's edge.
 const BLOCK: usize = 4;
 
-/// `out[g] = Σ packed[p]` over group `g`'s rows: the plain blocked fold over the rows the
+/// `out[g] = Σ packed[p]` over group `g`'s rows: the plain blocked sum over the rows the
 /// activations place themselves at. The walk is the run's, so a group of no rows takes no step.
 #[cube(launch)]
 fn indexed_ragged_sum_kernel<E: Numeric>(
@@ -474,7 +475,36 @@ fn indexed_ragged_sum_kernel<E: Numeric>(
     }
 }
 
-/// Every packed cell distinct, so folding a neighbouring group's row cannot land on the right
+/// [`indexed_ragged_sum_kernel`] with each block of a group's rows staged in shared memory before
+/// it is summed, `depth` stages in flight. The blocks are the group's walk over its run.
+#[cube(launch)]
+fn indexed_staged_ragged_sum_kernel<E: Numeric>(
+    packed: &TileArg<'_>,
+    out: &TileArg<'_>,
+    space: Partitioning,
+    #[comptime] group: Level,
+    #[comptime] depth: usize,
+    #[define(E)] _dtype: ElemType,
+) {
+    let packed = packed.tile(&space);
+    let out = out.tile(&space);
+
+    for g in space.over(&group) {
+        let rows = packed.at(&g);
+        let mut total = out.at(&g);
+        total.init::<E>(Monoid::identity::<E>(comptime!(Monoid::Sum)));
+        let blocks = g.walk_within(&rows);
+        let mut stages = Stages::smem_single(&blocks, &rows, StageStorage::Strided, depth, None);
+        stages.pipelined(blocks, |slot, blk| {
+            let mut cell = total.at(blk);
+            slot.consume(|rows_s| {
+                cell.reduce_axis_accumulate(rows_s, comptime!(Monoid::Sum));
+            });
+        });
+    }
+}
+
+/// Every packed cell distinct, so summing a neighbouring group's row cannot land on the right
 /// answer by accident.
 fn packed_values() -> Vec<f32> {
     (0..PACKED * FEATURES)
@@ -490,8 +520,15 @@ enum Rows {
     Transposed,
 }
 
-/// The fold over the groups `ends` cuts the rows into, `ends` each group's cumulative end row.
-fn run_ragged(ends: &[u32], rows: Rows) -> HostData {
+/// How the ragged sum reads each block: where it lies, or staged with this many stages in flight.
+#[derive(Clone, Copy, Debug)]
+enum BlockRead {
+    InPlace,
+    Staged(usize),
+}
+
+/// The sum over the groups `ends` cuts the rows into, `ends` each group's cumulative end row.
+fn run_ragged(ends: &[u32], rows: Rows, read: BlockRead) -> HostData {
     let client = cubecl::test_device().client();
     let f32_ty = f32::elem_type_native();
     let launcher = implied(
@@ -526,28 +563,48 @@ fn run_ragged(ends: &[u32], rows: Rows) -> HostData {
         .custom(vec![-1.0; GROUPS * FEATURES])
         .generate_without_host_data();
 
-    indexed_ragged_sum_kernel::launch(
-        &client,
-        launcher.cube_count(),
-        launcher.cube_dim(),
-        f32_arg(packed, spec)
-            .indexed(
-                table(&client, ends, Shape::new([ends.len()]), &[G]),
-                Indexing::Run(P),
-            )
-            .unwrap(),
-        f32_arg(out.clone(), TileSpec::direct(&[G, D])),
-        launcher.partitioning_arg(),
+    let packed = f32_arg(packed, spec)
+        .indexed(
+            table(&client, ends, Shape::new([ends.len()]), &[G]),
+            Indexing::Run(P),
+        )
+        .unwrap();
+    let total = f32_arg(out.clone(), TileSpec::direct(&[G, D]));
+    let (count, dim) = (launcher.cube_count(), launcher.cube_dim());
+    let (group, block) = (
         launcher.partitioning().level(0),
         launcher.partitioning().level(1),
-        f32_ty,
     );
+    match read {
+        BlockRead::InPlace => indexed_ragged_sum_kernel::launch(
+            &client,
+            count,
+            dim,
+            packed,
+            total,
+            launcher.partitioning_arg(),
+            group,
+            block,
+            f32_ty,
+        ),
+        BlockRead::Staged(depth) => indexed_staged_ragged_sum_kernel::launch(
+            &client,
+            count,
+            dim,
+            packed,
+            total,
+            launcher.partitioning_arg(),
+            group,
+            depth,
+            f32_ty,
+        ),
+    }
 
     HostData::from_tensor_handle(&client, out, HostDataType::F32)
 }
 
-/// Group `g`'s rows, from the end before it (`0` for the first) to its own, folded on the host;
-/// an end before its start folds nothing.
+/// Group `g`'s rows, from the end before it (`0` for the first) to its own, summed on the host;
+/// an end before its start sums nothing.
 fn expected_ragged(ends: &[u32]) -> Vec<Vec<f32>> {
     let values = packed_values();
     (0..GROUPS)
@@ -578,11 +635,15 @@ fn assert_ragged(got: &HostData, ends: &[u32], what: &str) {
 
 /// Each group's run off its cumulative end: runs of 2, 0, 5 and 3 rows, then 3, 0, 3 and 4. The
 /// answer follows the table, which it could not if the run did nothing, since every group would
-/// fold from row zero under both.
+/// sum from row zero under both.
 #[test]
-fn a_ragged_operand_folds_each_group_over_its_own_rows() {
+fn a_ragged_operand_sums_each_group_over_its_own_rows() {
     for ends in [[2u32, 2, 7, 10], [3, 3, 6, 10]] {
-        assert_ragged(&run_ragged(&ends, Rows::Lined), &ends, "lined");
+        assert_ragged(
+            &run_ragged(&ends, Rows::Lined, BlockRead::InPlace),
+            &ends,
+            "lined",
+        );
     }
 }
 
@@ -591,15 +652,36 @@ fn a_ragged_operand_folds_each_group_over_its_own_rows() {
 #[test]
 fn a_ragged_operand_runs_along_its_innermost_dim() {
     let ends = [2u32, 2, 7, 10];
-    assert_ragged(&run_ragged(&ends, Rows::Transposed), &ends, "transposed");
+    assert_ragged(
+        &run_ragged(&ends, Rows::Transposed, BlockRead::InPlace),
+        &ends,
+        "transposed",
+    );
+}
+
+/// The ragged sum with each block staged first, one or two stages in flight: the walk over a
+/// run proves every block but its last inside the run, which is staged unchecked, and the last
+/// reads zero past the run's end. Runs of 2, 0, 5 and 3 rows; 3, 0, 3 and 4, the last one whole
+/// block; and 2, 0, 13 and 1, the third four blocks long, enough for two stages to have laps
+/// with nothing to check.
+#[test]
+fn a_ragged_operand_stages_each_block_of_its_run() {
+    for ends in [[2u32, 2, 7, 10], [3, 3, 6, 10], [2, 2, 15, 16]] {
+        for rows in [Rows::Lined, Rows::Transposed] {
+            for depth in [1, 2] {
+                let got = run_ragged(&ends, rows, BlockRead::Staged(depth));
+                assert_ragged(&got, &ends, &format!("staged {depth} deep, {rows:?}"));
+            }
+        }
+    }
 }
 
 /// A table whose second group ends before it starts: that group is empty, not a run of some
-/// four billion rows, and its neighbours fold as stated.
+/// four billion rows, and its neighbours sum as stated.
 #[test]
 fn a_run_that_ends_before_it_starts_is_empty() {
     let ends = [4u32, 2, 7, 10];
-    let got = run_ragged(&ends, Rows::Lined);
+    let got = run_ragged(&ends, Rows::Lined, BlockRead::InPlace);
     for d in 0..FEATURES {
         assert_eq!(got.get_f32(&[1, d]), 0.0, "group 1 feature {d}");
     }
@@ -630,8 +712,8 @@ fn indexed_whole_sum_kernel<E: Numeric>(
     }
 }
 
-/// A single group, which no level cuts: its run is the table's one entry, seven of the ten rows,
-/// so the three past it never reach the sum.
+/// A single group, which no level cuts: its run is the table's one entry, seven of the sixteen
+/// rows, so the nine past it never reach the sum.
 #[test]
 fn a_table_no_level_cuts_places_its_one_run() {
     let client = cubecl::test_device().client();

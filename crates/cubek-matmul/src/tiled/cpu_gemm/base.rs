@@ -26,6 +26,7 @@
 //! - **A plane grid larger than a cube**: a forced blueprint with more planes than the device
 //!   launches in one cube.
 
+use cubek_std::selector::divisor_at_most;
 use std::fmt::Display;
 
 use cubecl::ir::HardwareProperties;
@@ -179,16 +180,18 @@ impl Display for CpuGemmStrategy {
 /// Pairs the [`CpuGemmStrategy`] knob with the [`CpuGemmBlueprint`] plan.
 pub struct CpuGemmRoutine;
 
-impl Routine<()> for CpuGemmRoutine {
+impl cubek_std::legacy::Routine for CpuGemmRoutine {
     type Strategy = CpuGemmStrategy;
     type Blueprint = CpuGemmBlueprint;
 }
+
+impl Routine<()> for CpuGemmRoutine {}
 
 impl CpuGemmRoutine {
     /// Resolve `strategy` into a validated cuboid for `problem` on this device.
     #[allow(clippy::result_large_err)]
     pub fn blueprint(
-        strategy: &BlueprintStrategy<(), CpuGemmRoutine>,
+        strategy: &BlueprintStrategy<CpuGemmRoutine>,
         problem: &MatmulProblem,
         device_settings: &DeviceSettings,
     ) -> Result<CpuGemmBlueprint, MatmulSetupError> {

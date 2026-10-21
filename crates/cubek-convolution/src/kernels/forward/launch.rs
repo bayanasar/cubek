@@ -1,8 +1,5 @@
 use crate::{
-    components::{
-        ConvSetupError, ConvolutionOperation, ConvolutionProblem, Dimensionality,
-        global::args::RuntimeArgs,
-    },
+    components::{ConvSetupError, ConvolutionOperation, ConvolutionProblem, Dimensionality},
     forward::args::ConcreteArgs,
     kernels::forward::selector::launch_kernel_concrete,
     launch::ConvolutionArgs,
@@ -27,7 +24,7 @@ pub(crate) fn launch_internal<const N_SPATIAL: usize, Rt: Routine>(
     bias: Option<InputBinding>,
     out: TensorBinding,
     args: ConvolutionArgs<N_SPATIAL>,
-    blueprint_strategy: &BlueprintStrategy<RuntimeArgs, Rt::MatmulRoutine>,
+    blueprint_strategy: &BlueprintStrategy<Rt::MatmulRoutine>,
     dtypes: MatmulElems,
 ) -> Result<(), ConvSetupError>
 where
@@ -68,7 +65,7 @@ fn launch_with_routine<Rt: Routine>(
     out: TensorBinding,
     (stride, padding, dilation): (&[usize], &[usize], &[usize]),
     dimensionality: Dimensionality,
-    blueprint_strategy: &BlueprintStrategy<RuntimeArgs, Rt::MatmulRoutine>,
+    blueprint_strategy: &BlueprintStrategy<Rt::MatmulRoutine>,
     dtypes: MatmulElems,
 ) -> Result<(), ConvSetupError>
 where
@@ -155,7 +152,7 @@ pub fn launch_kernel<Rt: Routine>(
     bias: Option<InputBinding>,
     out: TensorBinding,
     problem: ConvolutionProblem,
-    blueprint_strategy: &BlueprintStrategy<RuntimeArgs, Rt::MatmulRoutine>,
+    blueprint_strategy: &BlueprintStrategy<Rt::MatmulRoutine>,
     dtypes: MatmulElems,
 ) -> Result<(), ConvSetupError>
 where
@@ -163,12 +160,12 @@ where
 {
     // Shape/strides are treated as k-major, with the last dim always being the contiguous one.
     // So for the sake of selecting a vector size, the shape/strides are always row-major.
-    let vector_sizes = AvailableVectorSizes::from_type_sizes(
+    let mut vector_sizes = Rt::filter_vector_sizes(AvailableVectorSizes::from_type_sizes(
         client,
         input.data_elem_size(),
         weight.data_elem_size(),
         dtypes.acc_global.size(),
-    )
+    ))
     .filter_lhs_with_tensor(
         &input.data().strides,
         &input.data().shape,
@@ -179,9 +176,8 @@ where
         &weight.data().shape,
         MatrixLayout::RowMajor,
     )
-    .filter_out_with_tensor(&out.strides, &out.shape);
-
-    let mut vector_sizes = Rt::filter_vector_sizes(vector_sizes).pick_max()?;
+    .filter_out_with_tensor(&out.strides, &out.shape)
+    .pick_max()?;
 
     // The large vector size resulting from dequantizing ends up slower due to restrictions on
     // algorithms. Use this as a quick and dirty fix.
