@@ -68,16 +68,15 @@ impl Boundaries {
         };
         let coords = projection.untiled();
 
-        // Whether coordinate axis `pa` is in bounds by construction: it counts concrete axes in
-        // mixed radix (one at coefficient `1` the simplest case), none of which the tiles reach
-        // past or a table bounds, so it covers exactly the extent their product states.
+        // Whether coordinate axis `pa` is always in bounds: it is one or more concrete axes laid
+        // end to end (like `K = KB·16 + KI`), and the tiles reach past none of them and no table
+        // bounds them.
         let settled = |pa: usize| {
             coords
                 .physical_axis(pa)
-                .digits(concrete)
-                .is_some_and(|digits| {
-                    digits
-                        .iter()
+                .flattened_axes(concrete)
+                .is_some_and(|axes| {
+                    axes.iter()
                         .all(|axis| !overhangs.contains(axis) && !table_bounded.contains(axis))
                 })
         };

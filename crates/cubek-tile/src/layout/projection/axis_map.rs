@@ -353,13 +353,16 @@ impl PhysicalAxisMap {
         }
     }
 
-    /// The logical axes this physical axis counts in mixed radix, finest first: the finest at
-    /// coefficient `1`, each coarser at the product of the finer ones' extents in `space`, no
-    /// offset, no division. Such an axis covers exactly the positions one axis of their product
-    /// would, so it leaves the buffer only where one of them reaches past its extent. One axis at
-    /// coefficient `1` is the one-digit case ([`identity_axis`](Self::identity_axis)). `None`
-    /// for any other map, or where an axis but the coarsest has no comptime extent in `space`.
-    pub(crate) fn digits(&self, space: &Space) -> Option<SmallVec<[Axis; Space::MAX_RANK]>> {
+    /// The axes this buffer dim is made of, when it is one index over several axes laid end to
+    /// end, like `K = KB·16 + KI` over `KI` and `KB`. Listed finest first: the finest at scale
+    /// `1`, each next one at the product of the extents before it, no offset, no division. Such a
+    /// dim stays in the buffer whenever each of its axes stays in its extent. A single axis at
+    /// scale `1` is the simplest case ([`identity_axis`](Self::identity_axis)). `None` for any
+    /// other map, or when an axis other than the last has no comptime extent in `space`.
+    pub(crate) fn flattened_axes(
+        &self,
+        space: &Space,
+    ) -> Option<SmallVec<[Axis; Space::MAX_RANK]>> {
         if self.terms.is_empty() || self.offset != Offset::Static(0) || !self.divisor.is_unit() {
             return None;
         }
@@ -372,12 +375,12 @@ impl PhysicalAxisMap {
             })
             .collect::<Option<SmallVec<[(Axis, usize); Space::MAX_RANK]>>>()?;
         terms.sort_by_key(|&(_, scale)| scale);
-        let mut radix = Some(1);
+        let mut next_scale = Some(1);
         for &(axis, scale) in &terms {
-            if radix != Some(scale) || !space.contains(axis) {
+            if next_scale != Some(scale) || !space.contains(axis) {
                 return None;
             }
-            radix = match space.extent_raw(axis) {
+            next_scale = match space.extent_raw(axis) {
                 Extent::Static(extent) => Some(scale * extent),
                 Extent::Dynamic => None,
             };
@@ -428,15 +431,14 @@ mod tests {
         assert_eq!(with_dynamic_offset.dynamic_scale_count(), 0);
     }
 
-    /// An axis counting others in mixed radix names them finest first, whatever order its terms
-    /// were stated in; one at coefficient `1` is the one-digit case. A gap or overlap between
-    /// the digits, an offset, a division, a dynamic coefficient, or a finer digit of no comptime
-    /// extent counts in no radix.
+    /// The axes come back finest first, whatever order the terms are written in. A gap or
+    /// overlap between them, an offset, a division, a dynamic scale, or a finer axis with no
+    /// comptime extent gives `None`.
     #[test]
-    fn digits_are_the_axes_an_axis_counts_in_mixed_radix() {
+    fn flattened_axes_come_finest_first() {
         const C: Axis = Axis(2);
         let space = Space::new(&[(A, 4), (B, 16), (C, 3)]);
-        let axes = |map: &PhysicalAxisMap| map.digits(&space).map(|digits| digits.to_vec());
+        let axes = |map: &PhysicalAxisMap| map.flattened_axes(&space).map(|axes| axes.to_vec());
 
         assert_eq!(axes(&PhysicalAxisMap::of(A)), Some(vec![A]));
         assert_eq!(
@@ -461,12 +463,12 @@ mod tests {
 
         let finer_dynamic = Space::new(&[(A, 4), (B, 16)]).with_dynamic(&[B]);
         let blocked = PhysicalAxisMap::affine(&[(A, 16), (B, 1)]);
-        assert_eq!(blocked.digits(&finer_dynamic), None);
+        assert_eq!(blocked.flattened_axes(&finer_dynamic), None);
         let coarser_dynamic = Space::new(&[(A, 4), (B, 16)]).with_dynamic(&[A]);
         assert_eq!(
             blocked
-                .digits(&coarser_dynamic)
-                .map(|digits| digits.to_vec()),
+                .flattened_axes(&coarser_dynamic)
+                .map(|axes| axes.to_vec()),
             Some(vec![B, A])
         );
     }
