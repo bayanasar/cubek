@@ -49,6 +49,7 @@ pub trait CubeShuffleQRhsPlane:
     + Clone
     + PartialEq
     + Display
+    + 'static
 {
     /// What a cube of this plane declines.
     const CUBE_DECLINE: &'static str;
