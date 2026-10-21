@@ -97,6 +97,30 @@ impl MatrixAxes {
             .product()
     }
 
+    /// A run of `values` scalars along the columns from their origin, as an extent per axis of
+    /// `space`: the innermost axes taken whole, outwards, until the run is covered, every other
+    /// axis one. Over a `k` split in blocks of 16, a run of 32 is the whole of the position inside
+    /// a block, two blocks along.
+    ///
+    /// # Panics
+    ///
+    /// Where the column axes cover no run of `values` whole.
+    pub(crate) fn col_run(&self, space: &Space, values: usize) -> Vec<usize> {
+        let mut run = vec![1; space.rank()];
+        let mut left = values;
+        for p in (self.col_split..space.rank()).rev() {
+            let taken = space.extent_at(p).min(left);
+            assert!(
+                left.is_multiple_of(taken),
+                "MatrixAxes::col_run: a run of {values} values along the columns, which these \
+                 axes do not cover whole"
+            );
+            run[p] = taken;
+            left /= taken;
+        }
+        run
+    }
+
     /// The axes giving a `rows x cols` matrix, both scalar, found from the innermost axis outwards.
     pub(crate) fn new(space: &Space, rows: usize, cols: usize) -> Result<Self, NoMatrix> {
         let rank = space.rank();
@@ -191,6 +215,21 @@ mod tests {
     const OH: Axis = Axis(0);
     const RH: Axis = Axis(1);
     const CI: Axis = Axis(2);
+
+    /// A run along the columns takes the innermost axes whole, outwards, until it is covered.
+    #[test]
+    fn a_col_run_takes_the_innermost_axes_whole() {
+        const KB: Axis = Axis(3);
+        let blocked = Space::new(&[(OH, 8), (KB, 4), (CI, 16)]);
+        let axes = MatrixAxes::new(&blocked, 8, 64).unwrap();
+        assert_eq!(axes.col_run(&blocked, 32), vec![1, 2, 16]);
+        assert_eq!(axes.col_run(&blocked, 8), vec![1, 1, 8]);
+        let whole = Space::new(&[(OH, 8), (CI, 64)]);
+        assert_eq!(
+            MatrixAxes::trailing(&whole).col_run(&whole, 32),
+            vec![1, 32]
+        );
+    }
 
     /// One axis per edge.
     #[test]

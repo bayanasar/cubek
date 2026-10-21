@@ -1550,7 +1550,7 @@ impl Tile {
             Packing::Packed { field } => {
                 let (bits, per_word) =
                     comptime!((field.size_bits() as u32, field.per_word() as u32));
-                let word = self.word_in_line(coords, position);
+                let word = self.word_in_line(coords, position, per_word);
                 let shifted = word >> ((position % per_word) * bits);
                 unpack_line::<S, Const<1>, Const<1>>(Vector::new(shifted), field).extract(0usize)
             }
@@ -1576,16 +1576,12 @@ impl Tile {
         position
     }
 
-    /// The stored word holding the value at `coords` of a packed tile, the value `position` into
-    /// the load holding it ([`place_in_line`](Self::place_in_line)).
-    fn word_in_line(&self, coords: &Coords<u32>, position: u32) -> u32 {
+    /// The stored word holding the value at `coords` of a tile packed `per_word` values a word,
+    /// the value `position` into the load holding it ([`place_in_line`](Self::place_in_line)).
+    fn word_in_line(&self, coords: &Coords<u32>, position: u32, #[comptime] per_word: u32) -> u32 {
         let space = comptime!(self.place.space.clone());
         let load = self.vector_tile();
         let packing = self.packing();
-        let per_word = comptime!(match packing {
-            Packing::Packed { field } => field.per_word() as u32,
-            Packing::Plain => panic!("Tile::word_in_line: a plain tile holds values, not words"),
-        });
         let words_wide = comptime!(packing.physical(load.values()));
         let size!(WP) = words_wide;
         let words = self
@@ -1608,9 +1604,9 @@ impl Tile {
         let packing = self.packing();
         match comptime!(packing) {
             Packing::Plain => self.scale_at::<u32>(&own),
-            Packing::Packed { .. } => {
+            Packing::Packed { field } => {
                 let position = self.place_in_line(&own);
-                self.word_in_line(&own, position)
+                self.word_in_line(&own, position, comptime!(field.per_word() as u32))
             }
         }
     }

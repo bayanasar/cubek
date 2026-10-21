@@ -351,7 +351,11 @@ fn check_block_scaled_in_blocks(k: usize, (a_global, b_global): (f32, f32)) {
             TileSpec::new(along_k(axis)).packed(Field::Quant(QuantValue::E2M1)),
         );
         let block_scales = TileArgLaunch::new(
-            tensor(client.create_from_slice(u32::as_bytes(&scales)), rows, blocks),
+            tensor(
+                client.create_from_slice(u32::as_bytes(&scales)),
+                rows,
+                blocks,
+            ),
             words,
             1,
             TileSpec::new(along_k(axis).scales_per(KB)).packed(Field::of_float(FloatKind::E4M3)),
@@ -372,8 +376,20 @@ fn check_block_scaled_in_blocks(k: usize, (a_global, b_global): (f32, f32)) {
         &client,
         launcher.cube_count(),
         launcher.cube_dim(),
-        operand(codes(&a_codes), scale_fields(&a_scale_values), m, M, a_global),
-        operand(codes(&b_codes), scale_fields(&b_scale_values), n, N, b_global),
+        operand(
+            codes(&a_codes),
+            scale_fields(&a_scale_values),
+            m,
+            M,
+            a_global,
+        ),
+        operand(
+            codes(&b_codes),
+            scale_fields(&b_scale_values),
+            n,
+            N,
+            b_global,
+        ),
         TileArgLaunch::new(
             c.clone().binding().into_tensor_arg(),
             element,
