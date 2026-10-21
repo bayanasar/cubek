@@ -2,12 +2,12 @@
 
 use core::marker::PhantomData;
 
-use cubecl::zspace::SmallVec;
+use cubecl::zspace::{SmallVec, Tiling};
 
 use cubecl::ir::ElemType;
 use cubecl::prelude::*;
 
-use super::{boundaries::Boundaries, labels::Labels};
+use super::{boundaries::Boundaries, derivation::Derivation, labels::Labels};
 use crate::BoundaryPolicy;
 use crate::{
     Axis, Delivery, Extent, Field, Geometry, Launcher, LineMisfit, Packing, Paging, Projection,
@@ -20,32 +20,32 @@ pub struct Unlabelled;
 pub struct Labelled;
 
 /// What the builder accumulates.
-struct ArgData<'a> {
-    launch: &'a Launcher,
+pub(crate) struct ArgData<'a> {
+    pub(crate) launch: &'a Launcher,
     /// The tensor this operand is read from and the element its buffer holds; `None` for a
     /// destination with no address.
-    binding: Option<(TensorBinding, ElemType)>,
-    geometry: Geometry,
-    axes: &'a [Axis],
-    batches: &'a [Axis],
+    pub(crate) binding: Option<(TensorBinding, ElemType)>,
+    pub(crate) geometry: Geometry,
+    pub(crate) axes: &'a [Axis],
+    pub(crate) batches: &'a [Axis],
     /// The operand's own affine mapping; `None` derives it from the labelled dims.
-    projection: Option<Projection>,
-    width: usize,
+    pub(crate) projection: Option<Projection>,
+    pub(crate) width: usize,
     /// The stated policy; `None` derives one from the overhangs.
-    boundary: Option<BoundaryPolicy>,
-    packing: Packing,
+    pub(crate) boundary: Option<BoundaryPolicy>,
+    pub(crate) packing: Packing,
     /// Who moves the operand into a stage ([`delivery`](Arg::delivery)).
-    delivery: Delivery,
+    pub(crate) delivery: Delivery,
     /// Whether the labelled dims bind in stride order ([`in_stride_order`](Arg::in_stride_order)).
-    in_stride_order: bool,
+    pub(crate) in_stride_order: bool,
     /// The pool of pages this operand is read through, if any ([`paged`](Arg::paged)).
-    paged: Option<PagedPool>,
+    pub(crate) paged: Option<PagedPool>,
 }
 
 /// What [`Arg::paged`] states: the axes a table resolves, and whether it covers the launch
 /// ([`Arg::paged_covering`]).
-#[derive(Clone, Copy)]
-struct PagedPool {
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct PagedPool {
     sequence: Axis,
     position: Axis,
     covering: bool,
@@ -200,98 +200,118 @@ impl<'a> Arg<'a, Labelled> {
         })
     }
 
-    /// The derivation both builds share.
+    /// The derivation both builds share, looked up where an earlier launch already made it
+    /// ([`Derivation`]): it reads nothing a launch changes but the tensor's address.
     fn realize(self) -> Result<(Bound, Geometry), Refusal> {
         let data = self.data;
-        let launch = data.launch;
-        let width = data.width;
+        let packing = data.packing.read_on(data.launch.client());
         let stored = data
             .binding
             .as_ref()
             .map(|(b, _)| b.tiling)
             .unwrap_or_default();
-        let stated = data.projection.is_some() || stored.is_tiled();
-        let (geometry, axes) =
-            stride_ordered(data.geometry, data.axes, data.in_stride_order, stated)?;
-        let (storage, stored_tiles) =
-            storage_of(&geometry, &axes, data.projection.is_none(), launch);
-        let labels = match data.projection {
-            Some(projection) => {
-                Labels::stated(&geometry, launch, projection, &axes, data.batches, stored)?
-            }
-            None => Labels::new(&geometry, &axes, data.batches)?,
-        };
-        let Labels {
-            geometry,
-            projection,
-            addressed,
-        } = labels;
-        projection.validate(width)?;
-        let packing = data.packing.read_on(launch.client());
-        // After the labels settle, so the dims are the ones the kernel addresses, stride order
-        // included.
-        let paging = data
-            .paged
-            .map(|pool| {
-                pool.paging(
-                    &geometry,
-                    &projection,
-                    &stored_tiles,
-                    packing,
-                    data.delivery,
-                    width,
-                )
-            })
-            .transpose()?;
-        // A stated width is checked here: `stride / width` would truncate silently.
-        // A line runs along the innermost dim's axis; a buffer with no labelled dim has none.
-        let labels = projection.dense_labels();
-        let served = match labels.last() {
-            Some(&axis) => VectorTile::new(&stored_tiles, axis, width)
-                .map_err(LineMisfit::Tile)
-                .and_then(|tile| geometry.serves(tile.extents(), &labels)),
-            None if width == 1 => Ok(()),
-            None => Err(LineMisfit::NoDims),
-        };
-        served.map_err(|why| Refusal::WidthNotServed { width, why })?;
-        let overhangs = launch.overhangs();
-        let table_bounded: Vec<Axis> = match data.paged.is_some_and(|pool| pool.covering) {
-            true => Vec::new(),
-            false => paging
-                .iter()
-                .flat_map(|p| [p.sequence, p.position])
-                .collect(),
-        };
-        let boundaries = Boundaries::new(
-            data.boundary,
-            &projection,
-            &addressed,
-            launch.space(),
-            overhangs,
-            &table_bounded,
-            width,
-        )?;
-        let spec = TileSpec {
-            projection,
-            boundaries: boundaries.modes,
-            units: launch.cube_dim().num_elems() as usize,
-            packing,
-            storage,
-            stored_tiles,
-            delivery: Delivery::SyncPerUnit,
-            paging,
-        }
-        .delivery(data.delivery);
+        let derived =
+            Derivation::view(&data, packing, stored).derived(|| derive(&data, packing, stored))?;
         let tensor = data
             .binding
-            .map(|(binding, element)| (settled_tensor(binding, &geometry), element));
+            .map(|(binding, element)| (settled_tensor(binding, &derived.geometry), element));
         let bound = Bound {
             tensor,
-            vector_size: width,
-            spec,
+            vector_size: data.width,
+            spec: derived.spec,
         };
-        Ok((bound, geometry))
+        Ok((bound, derived.geometry))
     }
+}
+
+/// What [`Arg::realize`] derives from an operand's labels and its launch: the comptime spec and the
+/// geometry the tensor is bound at, stride order settled.
+#[derive(Clone)]
+pub(crate) struct Derived {
+    pub(crate) spec: TileSpec,
+    pub(crate) geometry: Geometry,
+}
+
+/// The derivation itself, from `data` with its packing read on the device and its buffer's stored
+/// tiling.
+fn derive(data: &ArgData<'_>, packing: Packing, stored: Tiling) -> Result<Derived, Refusal> {
+    let launch = data.launch;
+    let width = data.width;
+    let stated = data.projection.is_some() || stored.is_tiled();
+    let (geometry, axes) = stride_ordered(
+        data.geometry.clone(),
+        data.axes,
+        data.in_stride_order,
+        stated,
+    )?;
+    let (storage, stored_tiles) = storage_of(&geometry, &axes, data.projection.is_none(), launch);
+    let labels = match data.projection.clone() {
+        Some(projection) => {
+            Labels::stated(&geometry, launch, projection, &axes, data.batches, stored)?
+        }
+        None => Labels::new(&geometry, &axes, data.batches)?,
+    };
+    let Labels {
+        geometry,
+        projection,
+        addressed,
+    } = labels;
+    projection.validate(width)?;
+    // After the labels settle, so the dims are the ones the kernel addresses, stride order
+    // included.
+    let paging = data
+        .paged
+        .map(|pool| {
+            pool.paging(
+                &geometry,
+                &projection,
+                &stored_tiles,
+                packing,
+                data.delivery,
+                width,
+            )
+        })
+        .transpose()?;
+    // A stated width is checked here: `stride / width` would truncate silently.
+    // A line runs along the innermost dim's axis; a buffer with no labelled dim has none.
+    let labels = projection.dense_labels();
+    let served = match labels.last() {
+        Some(&axis) => VectorTile::new(&stored_tiles, axis, width)
+            .map_err(LineMisfit::Tile)
+            .and_then(|tile| geometry.serves(tile.extents(), &labels)),
+        None if width == 1 => Ok(()),
+        None => Err(LineMisfit::NoDims),
+    };
+    served.map_err(|why| Refusal::WidthNotServed { width, why })?;
+    let overhangs = launch.overhangs();
+    let table_bounded: Vec<Axis> = match data.paged.is_some_and(|pool| pool.covering) {
+        true => Vec::new(),
+        false => paging
+            .iter()
+            .flat_map(|p| [p.sequence, p.position])
+            .collect(),
+    };
+    let boundaries = Boundaries::new(
+        data.boundary,
+        &projection,
+        &addressed,
+        launch.space(),
+        overhangs,
+        &table_bounded,
+        width,
+    )?;
+    let spec = TileSpec {
+        projection,
+        boundaries: boundaries.modes,
+        units: launch.cube_dim().num_elems() as usize,
+        packing,
+        storage,
+        stored_tiles,
+        delivery: Delivery::SyncPerUnit,
+        paging,
+    }
+    .delivery(data.delivery);
+    Ok(Derived { spec, geometry })
 }
 
 /// A bound operand: its tensor argument and the element its buffer holds, comptime [`TileSpec`] and
