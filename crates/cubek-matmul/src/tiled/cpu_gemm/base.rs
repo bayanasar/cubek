@@ -56,6 +56,20 @@ fn divisor_at_most(k: usize, cap: usize) -> usize {
     best
 }
 
+/// The largest divisor of `k` not exceeding `cap` that is a whole number of `align`-wide vectors,
+/// or [`divisor_at_most`] where `k` has none.
+fn aligned_divisor_at_most(k: usize, cap: usize, align: usize) -> usize {
+    let align = align.max(1);
+    let cap = cap.clamp(1, k.max(1));
+    let mut best = None;
+    for d in (align..=cap).step_by(align) {
+        if k.is_multiple_of(d) {
+            best = Some(d);
+        }
+    }
+    best.unwrap_or_else(|| divisor_at_most(k, cap))
+}
+
 /// The divisor of `g` nearest `target`, ties going to the larger
 fn nearest_divisor(g: usize, target: usize) -> usize {
     let target = target.clamp(1, g.max(1));
@@ -218,9 +232,12 @@ impl CpuGemmRoutine {
         // N-reuse. Aim `tile_n ≈ √(budget·vw)`, then fill the budget along M. Snap each tile to
         // a divisor of its axis: a ragged tile masks every leaf and de-unrolls the kernel (~2×),
         // so a smaller clean tile wins. A narrow axis collapses its tile to the whole axis.
+        // `tile_n` is read in `vw`-wide lines, so it snaps to a divisor that is also a whole
+        // number of lines where one exists — see `aligned_divisor_at_most`. A width that is not
+        // a multiple of `align` leaves a partial vector on every row of every step of `K`.
         let budget_elems = (ACC_REG_BYTES / elem).max(1);
         let tn_target = ((budget_elems * vw) as f64).sqrt() as usize;
-        let tile_n = divisor_at_most(n, tn_target.max(1));
+        let tile_n = aligned_divisor_at_most(n, tn_target.max(1), vw);
         let tile_m = divisor_at_most(m, (budget_elems / tile_n).max(1));
 
         // K depth: `alpha` lerps from a shallow `vw` to the deepest panel that keeps A
@@ -274,5 +291,32 @@ mod tests {
     fn a_split_that_fits_is_the_aspect_ratio_split() {
         assert_eq!(plane_grid(512, 32, 16, 16), PlaneGrid { m: 16, n: 1 });
         assert_eq!(plane_grid(512, 32, 32, 32), PlaneGrid { m: 16, n: 2 });
+    }
+
+    #[test]
+    fn a_tile_width_is_a_whole_number_of_lines() {
+        assert_eq!(aligned_divisor_at_most(1632, 39, 16), 32);
+        assert_eq!(aligned_divisor_at_most(272, 39, 16), 16);
+        assert_eq!(aligned_divisor_at_most(336, 39, 16), 16);
+        assert_eq!(aligned_divisor_at_most(144, 39, 16), 16);
+        assert_eq!(aligned_divisor_at_most(112, 39, 16), 16);
+    }
+
+    #[test]
+    fn an_aligned_width_is_left_where_it_was() {
+        for n in [192, 672, 960, 160, 448, 2688, 32] {
+            assert_eq!(
+                aligned_divisor_at_most(n, 39, 16),
+                divisor_at_most(n, 39),
+                "n = {n}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_axis_no_line_divides_keeps_its_largest_divisor() {
+        assert_eq!(aligned_divisor_at_most(56, 39, 16), 28);
+        assert_eq!(aligned_divisor_at_most(24, 39, 16), 24);
+        assert_eq!(aligned_divisor_at_most(8, 39, 16), 8);
     }
 }
