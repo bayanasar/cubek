@@ -6,6 +6,7 @@ use cubecl::zspace::{SmallVec, Tiling};
 
 use cubecl::ir::ElemType;
 use cubecl::prelude::*;
+use cubecl::server::BufferBinding;
 
 use super::{boundaries::Boundaries, derivation::Derivation, labels::Labels};
 use crate::BoundaryPolicy;
@@ -327,6 +328,23 @@ pub struct Bound {
 }
 
 impl Bound {
+    /// This operand bound again over `buffers`, another buffer of the same layout: the tensor it
+    /// holds takes the next one and keeps the shape, strides and tiling it was settled at. A launch
+    /// that binds the same operands every step keeps its binding and changes only the addresses.
+    ///
+    /// `None` where `buffers` runs out, or where the operand aliases another input.
+    pub fn rebound(&self, buffers: &mut impl Iterator<Item = BufferBinding>) -> Option<Self> {
+        let tensor = match &self.tensor {
+            Some((tensor, element)) => Some((rebound_tensor(tensor, buffers.next()?)?, *element)),
+            None => None,
+        };
+        Some(Self {
+            tensor,
+            vector_size: self.vector_size,
+            spec: self.spec.clone(),
+        })
+    }
+
     /// The operand as the kernel's [`TileArg`](crate::TileArg) launch argument.
     pub fn arg(self) -> TileArgLaunch {
         let width = self.bound_width();
@@ -351,6 +369,7 @@ impl Bound {
 }
 
 /// What [`build_spec`](Arg::build_spec) settles for an operand with no tensor to bind.
+#[derive(Clone)]
 pub struct Unbound {
     pub spec: TileSpec,
     /// Served width (values per line).
@@ -433,6 +452,22 @@ fn storage_of(
         .rev()
         .find_map(|tile| windows.iter().position(|window| cuts_to(window, tile)));
     (Storage::Tiled(level), stored_tiles)
+}
+
+/// `tensor` over `buffer` instead of its own: the shape, strides and tiling it was settled at kept.
+/// `None` for an alias of another input, which holds no buffer.
+pub(crate) fn rebound_tensor(tensor: &TensorArg, buffer: BufferBinding) -> Option<TensorArg> {
+    match tensor {
+        TensorArg::Handle { handle } => Some(TensorArg::Handle {
+            handle: TensorBinding {
+                handle: buffer,
+                strides: handle.strides.clone(),
+                shape: handle.shape.clone(),
+                tiling: handle.tiling,
+            },
+        }),
+        TensorArg::Alias { .. } => None,
+    }
 }
 
 /// The binding as the arg ships it, its tiling restated over the settled geometry's dims.

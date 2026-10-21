@@ -15,7 +15,9 @@ use cubecl::std::tensor::{
 };
 use cubecl::unexpanded;
 
+use crate::launch::binding::rebound_tensor;
 use crate::tile::packing::base::Packing;
+use cubecl::server::BufferBinding;
 use crate::*;
 
 /// An operand as a single launch argument: its values, a buffer or a TMA tensor map, its comptime
@@ -400,6 +402,37 @@ impl TileArgLaunch {
             scale: None,
             index: None,
         }
+    }
+
+    /// This operand bound again over other buffers of the same layout: each tensor it holds, in the
+    /// order it holds them (its values, then its scales', then its index table's), takes the next
+    /// of `buffers` and keeps the shape, strides and tiling it was settled at. A launch that binds
+    /// the same operands every step keeps its binding and changes only the addresses.
+    ///
+    /// `None` for a tensor map, whose descriptor holds its buffer, and where `buffers` runs out.
+    pub fn rebound(&self, buffers: &mut impl Iterator<Item = BufferBinding>) -> Option<Self> {
+        let values = match &self.values {
+            ValuesLaunch::Tensor { tensor, width } => ValuesLaunch::Tensor {
+                tensor: rebound_tensor(tensor, buffers.next()?)?,
+                width: *width,
+            },
+            ValuesLaunch::TensorMap { .. } => return None,
+        };
+        let scale = match &self.scale {
+            Some(scale) => Some(Box::new(scale.rebound(buffers)?)),
+            None => None,
+        };
+        let index = match &self.index {
+            Some((table, indexing)) => Some((Box::new(table.rebound(buffers)?), indexing.clone())),
+            None => None,
+        };
+        Some(Self {
+            values,
+            spec: self.spec.clone(),
+            element: self.element,
+            scale,
+            index,
+        })
     }
 
     /// These values under `scale`, outside the scales they carry already: words of block scales
