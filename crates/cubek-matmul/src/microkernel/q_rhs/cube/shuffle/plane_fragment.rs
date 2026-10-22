@@ -42,6 +42,13 @@ impl CubeShuffleQRhsPlane for PlaneFragmentMicrokernel {
                 cube(fragments(1), 4),
                 cube(fragments(2), 4),
                 cube(fragments(1), 16),
+                // PROBE: wider planes, sharing each read of the activation across more columns.
+                cube(fragments(4), 2),
+                cube(fragments(4), 4),
+                cube(fragments(4), 8),
+                cube(fragments(8), 2),
+                cube(fragments(8), 4),
+                cube(fragments(8), 8),
             ],
             false => Vec::new(),
         }
