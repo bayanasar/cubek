@@ -13,7 +13,8 @@ pub(crate) struct Boundaries {
 
 impl Boundaries {
     /// The mode: the stated policy, else whether the operand overhangs, underflows or has an
-    /// extent a table sets.
+    /// extent a table sets, with [`Boundary::Zero`] or the boundary
+    /// [`AnyExtent`](BoundaryPolicy::AnyExtent) states.
     fn mode(
         policy: Option<BoundaryPolicy>,
         projection: &Projection,
@@ -25,18 +26,23 @@ impl Boundaries {
         match policy {
             Some(BoundaryPolicy::Unchecked) => None,
             Some(BoundaryPolicy::Every(boundary)) => Some(boundary),
-            None => {
+            None | Some(BoundaryPolicy::AnyExtent(_)) => {
+                let boundary = match policy {
+                    Some(BoundaryPolicy::AnyExtent(boundary)) => boundary,
+                    _ => Boundary::Zero,
+                };
                 let overhangs = addressed
                     .iter()
                     .filter(|&&axis| concrete.contains(axis))
                     .any(|axis| overhangs.contains(axis));
                 (overhangs || projection.may_underflow() || !table_bounded.is_empty())
-                    .then_some(Boundary::Zero)
+                    .then_some(boundary)
             }
         }
     }
 
-    /// `concrete` is the launch's real-extent space and `overhangs` the axes its tiles reach past.
+    /// `concrete` is the launch's real-extent space and `overhangs` the axes its tiles reach past:
+    /// this launch's, or under [`AnyExtent`](BoundaryPolicy::AnyExtent) those any extent could.
     /// `table_bounded` are the axes a page table sets the extent of at launch
     /// ([`Paging`](crate::Paging)): never in bounds by construction, and their extent a whole
     /// number of pages, so of lines.
