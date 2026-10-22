@@ -1,7 +1,6 @@
-//! The packed KV cache's format as the attention reads it: the widths its codes are stored at,
-//! whether its keys carry the QJL fix-up, and the decode of a run of its codes.
-
-use cubecl::prelude::*;
+//! The packed KV cache's format as the attention reads it: the widths its codes are stored at, and
+//! whether its keys carry the QJL fix-up. Its codes are read through tiles, which decode them
+//! ([`Tile::decoded`](cubecl::tile::Tile::decoded)).
 
 /// The per-coordinate widths a packed cache's codes are stored at: `32 / bits` coordinates share
 /// each `u32` word. Keys and values need not agree.
@@ -38,40 +37,4 @@ impl KeyFixup {
             KeyFixup::Qjl => 1,
         }
     }
-}
-
-/// The `N` consecutive coordinates from `first_coord` of the packed row starting at word
-/// `word_base` of `words`, each `bits`-wide field looked up in `table`.
-///
-/// `N` and the fields a word packs are both powers of two, so a vector's coordinates never
-/// straddle a word: the vector sits inside one word or spans whole ones, and each word it covers
-/// is loaded once.
-#[cube]
-pub fn packed_fields<F: Float, N: Size>(
-    words: &Tensor<u32>,
-    word_base: usize,
-    first_coord: usize,
-    table: &Tensor<F>,
-    #[comptime] bits: u32,
-) -> Vector<F, N> {
-    let n = N::value();
-    let pack_factor = comptime!(32u32 / bits) as usize;
-    let mask = comptime!((1u32 << bits) - 1u32);
-    let fields_per_word = comptime!(core::cmp::min(n, pack_factor));
-    let words_per_vector = comptime!(n / core::cmp::min(n, pack_factor));
-    // Zero whenever a vector covers whole words; the in-word start otherwise.
-    let field_offset = first_coord % pack_factor;
-
-    let mut out = Vector::<F, N>::zeroed();
-    #[unroll]
-    for w in 0..words_per_vector {
-        let word = words[word_base + first_coord / pack_factor + w];
-        #[unroll]
-        for j in 0..fields_per_word {
-            let shift = (field_offset + j) as u32 * bits;
-            let idx = (word >> shift) & mask;
-            out.insert(w * fields_per_word + j, table[idx as usize]);
-        }
-    }
-    out
 }

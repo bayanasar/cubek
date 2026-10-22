@@ -6,6 +6,7 @@ use crate::kernels::{
     HypercubeShuffleAttentionRoutine, HypercubeShuffleAttentionRoutineBlueprint,
     HypercubeShuffleMerge,
 };
+use cubecl::prelude::ComptimeOptionArgs;
 use cubecl::tile::launch::Refusal;
 use cubek_microkernel::attention::hypercube::{HypercubeMerge, HypercubeMergeShape};
 use cubek_std::Hardware;
@@ -91,9 +92,12 @@ impl HypercubeShuffleMerge for HypercubeLastArrivalShuffle {
                 }
             }
             AttentionCacheBinding::Packed(cache) => {
-                // SAFETY: as the tiles'; the packed words, norms and codebooks are read
-                // no further than the attended keys, and a field indexes its codebook, whose size
-                // is its width's.
+                let fixup = match cache.fixup {
+                    Some(fixup) => ComptimeOptionArgs::Some(fixup),
+                    None => ComptimeOptionArgs::None,
+                };
+                // SAFETY: as the tiles'; a field indexes its codebook, which holds an entry for
+                // every index (`PackedAttentionCache::new`).
                 unsafe {
                     hypercube_attention_arrival_packed_kernel::launch_unchecked(
                         client,
@@ -101,7 +105,9 @@ impl HypercubeShuffleMerge for HypercubeLastArrivalShuffle {
                         dim,
                         width,
                         binding.query.arg(),
-                        cache,
+                        cache.key,
+                        cache.value,
+                        fixup,
                         tensors.out_arg(),
                         slots.out.binding().into_tensor_arg(),
                         slots.max.binding().into_tensor_arg(),

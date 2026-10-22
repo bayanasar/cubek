@@ -211,7 +211,7 @@ impl AttentionTensors {
     ///
     /// Where the keys carry a QJL fix-up, `query` is the query followed along its head dim by its
     /// projection, `d` twice the cache's head dim: the keys' lines run as far, their second half
-    /// the fix-up ([`PackedLines`](cubek_microkernel::attention::PackedLines)).
+    /// the fix-up ([`PackedKeyLines`](cubek_microkernel::attention::PackedKeyLines)).
     ///
     /// # Errors
     ///
@@ -553,7 +553,7 @@ impl AttentionTensors {
                 let value = read_cache(value, &[B, KV, S, DV], widths.value);
                 AttentionCacheBinding::Tiles { key, value }
             }
-            AttentionCache::Packed(cache) => AttentionCacheBinding::Packed(cache.arg()),
+            AttentionCache::Packed(cache) => AttentionCacheBinding::Packed(cache.bind(&launcher)),
         };
         let out = arg(
             &self.out_view,

@@ -2,9 +2,12 @@
 //! its per-vector norms and the codebook, and the keys' QJL fix-up where there is one.
 
 use cubecl::ir::{ElemType, FloatKind, UIntKind};
+use cubecl::tile::kind::Field;
+use cubecl::tile::{Axis, Launcher, TileArgLaunch, TileSpec};
+use cubecl::zspace::metadata::Metadata;
 use cubek_matmul::kernels::tensor::PlainTensor;
-use cubek_microkernel::attention::PackedCacheArgLaunch;
 use cubek_microkernel::attention::packed_cache::{KeyFixup, KvBitWidths};
+use cubek_microkernel::attention::{B, D, DV, KV, S};
 
 /// A packed cache: both operands at their bit widths, and the keys' fix-up where they carry one.
 ///
@@ -50,8 +53,9 @@ impl PackedAttentionCache {
     ///
     /// # Panics
     ///
-    /// Words that are not `u32` or whose fields of a row are not adjacent, or a norm, codebook or
-    /// fix-up table not in `f32`: what a caller converts before handing the cache over.
+    /// Words that are not `u32` or whose fields of a row are not adjacent, a norm, codebook or
+    /// fix-up table not in `f32`, or a codebook not one-dim with an entry for every index: what a
+    /// caller converts before handing the cache over.
     pub fn new(
         key: PackedAttentionOperand,
         value: PackedAttentionOperand,
@@ -60,7 +64,16 @@ impl PackedAttentionCache {
     ) -> Self {
         const WORD: ElemType = ElemType::UInt(UIntKind::U32);
         const TABLE: ElemType = ElemType::Float(FloatKind::F32);
-        for operand in [&key, &value] {
+        let indexes = |table: &PlainTensor, bits: u32| {
+            let shape = table.shape();
+            assert!(
+                shape.len() == 1 && shape[0] >= 1 << bits,
+                "a codebook is one-dim, an entry for each of the {} indices: got {shape:?}",
+                1u32 << bits
+            );
+        };
+        for (operand, bits) in [(&key, bits.key), (&value, bits.value)] {
+            indexes(&operand.codebook, bits);
             assert_eq!(operand.words.elem, WORD, "a packed operand's words are u32");
             assert_eq!(
                 operand.words.binding.strides[3], 1,
@@ -72,6 +85,7 @@ impl PackedAttentionCache {
             );
         }
         if let Some(fixup) = &fixup {
+            indexes(&fixup.sign_codebook, bits.key);
             assert!(
                 fixup.errs.elem == TABLE && fixup.sign_codebook.elem == TABLE,
                 "the QJL fix-up's lengths and sign codebook are f32"
@@ -90,29 +104,23 @@ impl PackedAttentionCache {
         self.key.words.shape()[3] * 32 / self.bits.key as usize
     }
 
-    /// The cache as a kernel argument
-    /// ([`PackedCacheArg`](cubek_microkernel::attention::PackedCacheArg)).
-    pub fn arg(&self) -> PackedCacheArgLaunch {
-        // Without a fix-up the kernel still takes its two tensors, and never reads them.
-        let (errs, sign_codebook) = match &self.fixup {
-            Some(fixup) => (&fixup.errs, &fixup.sign_codebook),
-            None => (&self.key.norms, &self.key.codebook),
-        };
-        let arg = |tensor: &PlainTensor| tensor.binding.clone().into_tensor_arg();
-        PackedCacheArgLaunch::new(
-            arg(&self.key.words),
-            arg(&self.key.norms),
-            arg(&self.key.codebook),
-            arg(errs),
-            arg(sign_codebook),
-            arg(&self.value.words),
-            arg(&self.value.norms),
-            arg(&self.value.codebook),
-            self.coords(),
-            self.bits.key,
-            self.bits.value,
-            self.layout().fixup,
-        )
+    /// The cache bound under `launcher`, each operand a tile its kernel decodes as it reads it
+    /// ([`Tile::decoded`](cubecl::tile::Tile::decoded)): the keys along the head dim `D`, the
+    /// values along `DV`, and the keys' fix-up, the same words read through the sign codebook
+    /// under the residual lengths, where they carry one.
+    pub fn bind(&self, launcher: &Launcher) -> PackedCacheBinding {
+        PackedCacheBinding {
+            key: self.key.bind(launcher, self.bits.key, D),
+            value: self.value.bind(launcher, self.bits.value, DV),
+            fixup: self.fixup.as_ref().map(|fixup| {
+                let fixup = PackedAttentionOperand {
+                    words: self.key.words.clone(),
+                    norms: fixup.errs.clone(),
+                    codebook: fixup.sign_codebook.clone(),
+                };
+                fixup.bind(launcher, self.bits.key, D)
+            }),
+        }
     }
 
     /// What a launch over this cache compiles about it.
@@ -124,5 +132,71 @@ impl PackedAttentionCache {
                 None => KeyFixup::RoundOnly,
             },
         }
+    }
+}
+
+/// A packed cache bound for a launch ([`PackedAttentionCache::bind`]).
+pub struct PackedCacheBinding {
+    pub key: TileArgLaunch,
+    pub value: TileArgLaunch,
+    pub fixup: Option<TileArgLaunch>,
+}
+
+/// The axis of a codebook's table, its positions: outside every kernel's space.
+const CODEBOOK: Axis = Axis(7);
+
+/// What every packed binding rests on, checked by [`PackedAttentionCache::new`].
+const CHECKED_BY_NEW: &str =
+    "a packed cache's buffers are as PackedAttentionCache::new checks them";
+
+impl PackedAttentionOperand {
+    /// The operand bound under `launcher` along `[B, KV, S, head]`: its words' `bits`-wide fields
+    /// indices into its codebook, each vector under its norm. Bound a word a line, the width a
+    /// decoding read takes.
+    fn bind(&self, launcher: &Launcher, bits: u32, head: Axis) -> TileArgLaunch {
+        const TABLE: ElemType = ElemType::Float(FloatKind::F32);
+        let axes = [B, KV, S, head];
+        // A norm per vector, `[b, kv, s, 1]`, scales the vector along `[b, kv, s]`.
+        let binding = &self.norms.binding;
+        let rows = self.norms.viewed(Metadata::new(
+            binding.shape[..3].to_vec(),
+            binding.strides[..3].to_vec(),
+        ));
+        let norms = launcher
+            .arg(rows.binding, TABLE)
+            .axes(&axes[..3])
+            .build()
+            .expect(CHECKED_BY_NEW)
+            .arg();
+        let codebook = TileArgLaunch::new(
+            self.codebook.binding.clone().into_tensor_arg(),
+            TABLE,
+            1,
+            TileSpec::direct(&[CODEBOOK]),
+        );
+        // A packed binding is stated in the values its words hold.
+        let per_word = 32 / bits as usize;
+        let binding = &self.words.binding;
+        let mut shape = binding.shape.to_vec();
+        shape[3] *= per_word;
+        let strides = binding.strides[..3]
+            .iter()
+            .map(|stride| stride * per_word)
+            .chain([1])
+            .collect::<Vec<_>>();
+        let values = self.words.viewed(Metadata::new(shape, strides));
+        launcher
+            .arg(values.binding, ElemType::UInt(UIntKind::U32))
+            .axes(&axes)
+            .vectorize(1)
+            .packed(Field::Index {
+                bits: bits as usize,
+            })
+            .build()
+            .expect(CHECKED_BY_NEW)
+            .arg()
+            .codebook(codebook)
+            .expect(CHECKED_BY_NEW)
+            .scales(norms)
     }
 }

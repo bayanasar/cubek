@@ -1,7 +1,7 @@
+use crate::kernels::PackedCacheBinding;
 use cubecl::prelude::{ComptimeOptionArgs, Tensor, TensorArg};
 use cubecl::tile::Launcher;
 use cubecl::tile::launch::Bound;
-use cubek_microkernel::attention::PackedCacheArgLaunch;
 
 /// The arguments of one launch, its operands bound under its launcher. Not `Debug`: cubek's
 /// `Launcher` is not.
@@ -25,8 +25,8 @@ pub struct AttentionBinding {
 pub enum AttentionCacheBinding {
     /// As tiles, under the launcher.
     Tiles { key: Bound, value: Bound },
-    /// As a packed cache, which the kernel decodes as it reads it.
-    Packed(PackedCacheArgLaunch),
+    /// As a packed cache's tiles, which the kernel decodes as it reads them.
+    Packed(PackedCacheBinding),
 }
 
 impl AttentionCacheBinding {
