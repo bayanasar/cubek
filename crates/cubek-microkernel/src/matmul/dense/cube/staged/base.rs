@@ -156,8 +156,32 @@ impl CubeStagedMicrokernel {
                     CubeStagedMicrokernelSettings::in_steps(steps, planes, ring)
                 })
             });
+        // MEASURE ONLY: the packed boxes filled by planes set aside, which decode as the rest
+        // contract.
+        let set_aside = [
+            ((4, 4), (2, 2)),
+            ((4, 2), (2, 2)),
+            ((8, 1), (2, 2)),
+            ((4, 2), (4, 1)),
+        ]
+        .into_iter()
+        .flat_map(|(steps, planes)| {
+            [
+                (StageRing::DOUBLE, 1),
+                (StageRing::TRIPLE, 1),
+                (StageRing::TRIPLE, 2),
+            ]
+            .map(|(ring, filling)| {
+                CubeStagedMicrokernelSettings::in_steps(steps, planes, ring)
+                    .through(PlaneFragmentTransport::Mma)
+                    .filled(CubeStagedDelivery::Copy, filling)
+            })
+        });
         let mut settings = vec![CubeStagedMicrokernelSettings::PACKED];
-        for candidate in boxed.chain(Self::packed_one_step_settings()) {
+        for candidate in boxed
+            .chain(set_aside)
+            .chain(Self::packed_one_step_settings())
+        {
             let merges = candidate.planes_along_k.get() > 1;
             if (!merges || hw.shared_f32_atomic_add()) && !settings.contains(&candidate) {
                 settings.push(candidate);
