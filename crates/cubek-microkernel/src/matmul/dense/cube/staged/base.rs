@@ -770,6 +770,12 @@ impl Microkernel for CubeStagedMicrokernel {
                 filled_by_tma((2, 8, 2), (2, 2), double, 1),
                 filled_by_tma((2, 16, 2), (8, 1), double, 0),
                 filled_by_tma((2, 16, 2), (4, 2), StageRing::TRIPLE, 0),
+                // MEASURE ONLY: smaller boxes, twice the cubes, for the narrow projections.
+                stored_by_tma(filled_by_tma((2, 4, 4), (2, 2), StageRing::TRIPLE, 1)),
+                stored_by_tma(filled_by_tma((2, 8, 4), (1, 2), StageRing::TRIPLE, 1)),
+                stored_by_tma(filled_by_tma((2, 8, 4), (2, 1), StageRing::TRIPLE, 1)),
+                filled_by_tma((2, 4, 4), (2, 2), StageRing::TRIPLE, 1),
+                filled_by_tma((2, 8, 4), (1, 2), StageRing::TRIPLE, 1),
             ]
         });
         let wgmma = (hw.bulk_tensor_copy()
