@@ -3,7 +3,7 @@ use cubecl::prelude::{ComptimeOptionArgs, Tensor, TensorArg};
 use cubecl::tile::Launcher;
 use cubecl::tile::launch::Bound;
 
-/// The arguments of one launch, its operands bound under its launcher. Not `Debug`: cubek's
+/// The arguments of one launch, its operands bound under its launcher. Not `Debug`: the tile DSL's
 /// `Launcher` is not.
 pub struct AttentionBinding {
     pub launcher: Launcher,

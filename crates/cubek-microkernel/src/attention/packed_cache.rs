@@ -17,8 +17,7 @@ pub struct KvBitWidths {
 ///
 /// Two different algorithms rather than a flag: [`Qjl`](Self::Qjl) emits three extra `O(d²)`
 /// passes, writes a second scalar buffer, and shifts every packed index up by one bit. Naming them
-/// keeps the choice legible at a call site, where a bare `true` said nothing about which of those
-/// it selected.
+/// keeps the choice legible at a call site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyFixup {
     /// Round-only (Q_mse): the packed field is entirely the centroid index.
