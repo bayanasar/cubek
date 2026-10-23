@@ -1,20 +1,14 @@
 //! The entry point a caller runs a backward pass through.
 
-use crate::kernels::UnitAttentionBackwardRoutine;
-use crate::{AttentionBackwardGradients, AttentionBackwardRoutine, AttentionBackwardTensors};
-use cubecl::tile::launch::Refusal;
-use cubek_std::Hardware;
+use crate::tune::launch_tuned;
+use crate::{AttentionBackwardGradients, AttentionBackwardTensors};
+use cubecl::Device;
 
-/// The gradients of the attention `tensors` state, on their client's device.
-///
-/// # Errors
-///
-/// Why the device cannot run the backward pass.
+/// The gradients of the attention `tensors` state, on `device`: the fastest routine autotune
+/// measured for the problem, or the unit routine's lead where none other runs.
 pub fn attention_backward(
+    device: &Device,
     tensors: AttentionBackwardTensors,
-) -> Result<AttentionBackwardGradients, Refusal> {
-    let hw = Hardware::from_client(tensors.client());
-    let routine = UnitAttentionBackwardRoutine;
-    let settings = routine.settings(&hw).swap_remove(0);
-    routine.launch_on(&hw, tensors, &settings)
+) -> AttentionBackwardGradients {
+    launch_tuned(device, tensors)
 }

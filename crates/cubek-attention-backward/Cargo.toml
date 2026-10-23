@@ -23,6 +23,7 @@ cubek-microkernel = { workspace = true, features = ["attention-backward"] }
 cubek-std = { workspace = true }
 
 cubecl = { workspace = true, features = ["stdlib", "tile"] }
+serde = { workspace = true }
 
 [dev-dependencies]
 cubek-attention = { workspace = true, features = ["std", "tiled"] }

@@ -1,6 +1,6 @@
 use crate::matmul::MatmulAxes;
 use crate::matmul::dense::plane::PlaneFragmentMicrokernel;
-use cubecl::tile::{Level, Semiring, Tile};
+use cubecl::tile::{Axis, Level, Semiring, Space, Tile};
 use cubecl::{self as cubecl, cube, prelude::*};
 
 /// `window = lhs · rhs`, summed in `EA` on `product`'s own grid of fragments, placed as `levels`
@@ -75,12 +75,43 @@ pub(crate) fn contract_on_grid(
         for row in 0..rows {
             #[unroll]
             for column in 0..columns {
-                let mut fragment = sum.at(&sum_fragments.region(row * columns + column));
+                let (at_sum, at_lhs, at_rhs) = comptime!((
+                    fragment_at(
+                        &sum.space(),
+                        (rows_axis, row, rows),
+                        (columns_axis, column, columns)
+                    ),
+                    fragment_at(
+                        &lhs.space(),
+                        (rows_axis, row, rows),
+                        (depth_axis, step, depth)
+                    ),
+                    fragment_at(
+                        &rhs.space(),
+                        (columns_axis, column, columns),
+                        (depth_axis, step, depth)
+                    ),
+                ));
+                let mut fragment = sum.at(&sum_fragments.region(at_sum));
                 fragment.mma(
-                    &lhs.at(&lhs_fragments.region(row * depth + step)),
-                    &rhs.at(&rhs_fragments.region(column * depth + step)),
+                    &lhs.at(&lhs_fragments.region(at_lhs)),
+                    &rhs.at(&rhs_fragments.region(at_rhs)),
                 );
             }
         }
+    }
+}
+
+/// The place among a tile's fragments of the one at `first.1` of `first.2` along `first.0` and
+/// `second.1` of `second.2` along `second.0`: a level's regions run along the tile's own axes in
+/// the order its space lays them, the last fastest.
+fn fragment_at(
+    space: &Space,
+    (first, first_at, first_count): (Axis, usize, usize),
+    (second, second_at, second_count): (Axis, usize, usize),
+) -> usize {
+    match space.position(first) < space.position(second) {
+        true => first_at * second_count + second_at,
+        false => second_at * first_count + first_at,
     }
 }

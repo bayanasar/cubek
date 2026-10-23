@@ -83,11 +83,30 @@ fn the_plane_routine_in_f16() {
     run(CASE, half::f16::elem_type_native(), 3e-2, None);
 }
 
-/// Every setting the routine lists prepares and computes the same gradients.
+/// Every setting the routine lists prepares and computes the same gradients, on a value dim two
+/// fragments wide, so every grid holds more than one fragment along it.
 #[test]
 fn every_plane_setting_matches_the_reference() {
     let hw = Hardware::from_client(&cubecl::test_device().client());
+    let case = Case {
+        val_dim: 16,
+        ..CASE
+    };
     for settings in PlaneFragmentAttentionBackwardRoutine.settings(&hw) {
-        run(CASE, f32::elem_type_native(), 1e-3, Some(settings));
+        run(case, f32::elem_type_native(), 1e-3, Some(settings));
     }
+}
+
+/// A value dim of two fragments: the values' gradient holds a grid of its own two fragments wide.
+#[test]
+fn the_plane_routine_holds_a_wide_value_dim() {
+    run(
+        Case {
+            val_dim: 16,
+            ..CASE
+        },
+        f32::elem_type_native(),
+        1e-3,
+        None,
+    );
 }

@@ -16,9 +16,11 @@
 //! then owned by the keys, for theirs and their values'. Nothing is summed across owners, so a
 //! run's gradients are the same bits every time.
 //!
-//! The routines, one folder per scope, are in `kernels`; [`attention_backward`] runs one.
+//! The routines, one folder per scope, are in `kernels`; [`attention_backward`] runs the one
+//! autotune measures fastest.
 
 pub mod kernels;
+pub mod tune;
 
 mod launch;
 mod problem;
