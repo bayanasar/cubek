@@ -25,6 +25,7 @@ cubek-std = { workspace = true }
 cubecl = { workspace = true, features = ["stdlib", "tile"] }
 
 [dev-dependencies]
+cubek-attention = { workspace = true, features = ["std", "tiled"] }
 cubek-test-utils = { workspace = true }
 half = { workspace = true }
 

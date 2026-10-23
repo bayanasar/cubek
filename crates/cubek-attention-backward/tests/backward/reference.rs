@@ -48,6 +48,12 @@ impl Case {
 /// A case's inputs on the device, at `element`, and every tensor of both passes on the host.
 pub struct Reference {
     pub tensors: AttentionBackwardTensors,
+    /// The forward's inputs on the device, `[query, key, value]`, and the loss's gradient against
+    /// its output.
+    pub inputs: [TensorHandle; 3],
+    pub out_gradient: TensorHandle,
+    /// `[b, h, q]`.
+    pub logsumexp: Vec<f64>,
     /// `[b, h, q, d]`.
     pub query_gradient: Vec<f64>,
     /// `[b, kv, s, d]`.
@@ -107,9 +113,18 @@ impl Reference {
                             })
                         })
                         .collect();
-                    let max = scores.iter().flatten().cloned().fold(f64::NEG_INFINITY, f64::max);
-                    let lse =
-                        max + scores.iter().flatten().map(|s| (s - max).exp()).sum::<f64>().ln();
+                    let max = scores
+                        .iter()
+                        .flatten()
+                        .cloned()
+                        .fold(f64::NEG_INFINITY, f64::max);
+                    let lse = max
+                        + scores
+                            .iter()
+                            .flatten()
+                            .map(|s| (s - max).exp())
+                            .sum::<f64>()
+                            .ln();
                     logsumexp[row] = lse;
                     let p: Vec<f64> = scores
                         .iter()
@@ -129,11 +144,14 @@ impl Reference {
                         let ds = probability * (dp - delta);
                         let key_row = (b * kv_heads + kv) * seq_kv + j;
                         for d in 0..head_dim {
-                            query_gradient[row * head_dim + d] += scale * ds * get(&k, [b, kv, j, d]);
-                            key_gradient[key_row * head_dim + d] += scale * ds * get(&q, [b, h, i, d]);
+                            query_gradient[row * head_dim + d] +=
+                                scale * ds * get(&k, [b, kv, j, d]);
+                            key_gradient[key_row * head_dim + d] +=
+                                scale * ds * get(&q, [b, h, i, d]);
                         }
                         for c in 0..val_dim {
-                            value_gradient[key_row * val_dim + c] += probability * get(&d_o, [b, h, i, c]);
+                            value_gradient[key_row * val_dim + c] +=
+                                probability * get(&d_o, [b, h, i, c]);
                         }
                     }
                 }
@@ -146,22 +164,29 @@ impl Reference {
                 .generate_without_host_data()
         };
         let out = device(vec![batch, heads, seq_q, val_dim], &out, element);
-        let logsumexp = device(vec![batch, heads, seq_q], &logsumexp, f32::elem_type_native());
-        let plain = |handle: TensorHandle| PlainTensor::of_handle(handle);
+        let lse = device(
+            vec![batch, heads, seq_q],
+            &logsumexp,
+            f32::elem_type_native(),
+        );
+        let plain = |handle: &TensorHandle| PlainTensor::of_handle(handle.clone());
         let tensors = AttentionBackwardTensors::new(
             client,
-            plain(query),
-            plain(key),
-            plain(value),
-            plain(out),
-            plain(out_gradient),
-            plain(logsumexp),
+            plain(&query),
+            plain(&key),
+            plain(&value),
+            plain(&out),
+            plain(&out_gradient),
+            plain(&lse),
             scale as f32,
             case.visibility,
         )
         .expect("the case's tensors are verified");
         Self {
             tensors,
+            inputs: [query, key, value],
+            out_gradient,
+            logsumexp,
             query_gradient,
             key_gradient,
             value_gradient,
