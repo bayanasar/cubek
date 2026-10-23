@@ -162,8 +162,22 @@ impl CubeStagedMicrokernel {
                 )
             })
             .collect();
+        // MEASURE ONLY: the boxes filled by the TMA engine, as the float routine's are.
+        let tma_filled: Vec<_> = Self::PACKED_BOXES
+            .into_iter()
+            .chain([((2, 8), (2, 2)), ((4, 8), (2, 2)), ((2, 4), (2, 2))])
+            .flat_map(|(steps, planes)| {
+                [StageRing::DOUBLE, StageRing::TRIPLE].into_iter().flat_map(move |ring| {
+                    let base = CubeStagedMicrokernelSettings::in_steps(steps, planes, ring);
+                    [0, 1].into_iter().flat_map(move |filling| {
+                        [base, base.through(PlaneFragmentTransport::Mma)]
+                            .map(|s| s.filled(CubeStagedDelivery::Tma, filling))
+                    })
+                })
+            })
+            .collect();
         let mut settings = vec![CubeStagedMicrokernelSettings::PACKED];
-        for candidate in boxed.into_iter().chain(Self::packed_one_step_settings()) {
+        for candidate in boxed.into_iter().chain(tma_filled).chain(Self::packed_one_step_settings()) {
             let merges = candidate.planes_along_k.get() > 1;
             if (!merges || hw.shared_f32_atomic_add()) && !settings.contains(&candidate) {
                 settings.push(candidate);
