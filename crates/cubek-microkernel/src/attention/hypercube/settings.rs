@@ -129,9 +129,17 @@ impl HypercubeAttentionPlaneSettings for PlaneFragmentAttentionMicrokernelSettin
                     ..cube
                 },
             });
+        // MEASURE ONLY: the one-by-eight box on two and four planes along a head's queries.
+        let split = [2, 4].map(|planes| HypercubeAttentionMicrokernelSettings {
+            cube: CubeAttentionMicrokernelSettings {
+                planes_along_queries: count(planes),
+                ..swizzled[0].cube
+            },
+        });
         [HypercubeAttentionMicrokernelSettings::<Self>::DEFAULT]
             .into_iter()
             .chain(swizzled)
+            .chain(split)
             .collect()
     }
 }
