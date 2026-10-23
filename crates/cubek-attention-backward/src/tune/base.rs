@@ -1,6 +1,9 @@
 //! Choosing a backward pass's routine by measurement.
 
-use crate::kernels::{PlaneFragmentAttentionBackwardRoutine, UnitAttentionBackwardRoutine};
+use crate::kernels::{
+    CubeStagedAttentionBackwardRoutine, PlaneFragmentAttentionBackwardRoutine,
+    UnitAttentionBackwardRoutine,
+};
 use crate::tune::{AttentionBackwardCandidate, AttentionBackwardKey};
 use crate::{AttentionBackwardGradients, AttentionBackwardRoutine, AttentionBackwardTensors};
 use cubecl::tune::{LocalTuner, Tunable, TunableSet, local_tuner};
@@ -28,20 +31,26 @@ pub fn launch_tuned(
 
 type AttentionBackwardAutotune = Autotune<AttentionBackwardKey, AttentionBackwardTensors, ()>;
 
-/// The plane routine where the device commits to a plane width, the unit routine where it does
-/// not: elsewhere measuring the unit routine's settings takes longer than the plane's, and its
-/// lead sits under them all.
+/// The plane and the cube staged routines where the device commits to a plane width, the unit
+/// routine where it does not: elsewhere measuring the unit routine's settings takes longer than
+/// the others', and its lead sits under them all.
 fn routines(hw: &Hardware) -> TunableSet<AttentionBackwardKey, AttentionBackwardTensors, ()> {
     let mut autotune = AttentionBackwardAutotune::new(|tensors: &AttentionBackwardTensors| {
         AttentionBackwardKey::of(&tensors.problem())
     });
     let routines = autotune.group("microkernel", GroupPriority::DEFAULT);
     autotune = match hw.plane_dim() {
-        Ok(_) => autotune.prioritized(
-            &routines,
-            AttentionBackwardCandidate::list(PlaneFragmentAttentionBackwardRoutine, hw),
-            launch,
-        ),
+        Ok(_) => autotune
+            .prioritized(
+                &routines,
+                AttentionBackwardCandidate::list(PlaneFragmentAttentionBackwardRoutine, hw),
+                launch,
+            )
+            .prioritized(
+                &routines,
+                AttentionBackwardCandidate::list(CubeStagedAttentionBackwardRoutine, hw),
+                launch,
+            ),
         Err(_) => autotune.prioritized(
             &routines,
             AttentionBackwardCandidate::list(UnitAttentionBackwardRoutine, hw),
