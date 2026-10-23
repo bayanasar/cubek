@@ -149,13 +149,19 @@ impl CubeStagedMicrokernel {
     /// into its store, which its fragments drain into cell by cell; the race sees only the
     /// product.
     pub fn packed_settings(hw: &Hardware) -> Vec<CubeStagedMicrokernelSettings> {
-        let boxed = [StageRing::SINGLE, StageRing::DOUBLE]
-            .into_iter()
-            .flat_map(|ring| {
-                Self::PACKED_BOXES.map(|(steps, planes)| {
-                    CubeStagedMicrokernelSettings::in_steps(steps, planes, ring)
-                })
-            });
+        // MEASURE ONLY: every box, and the float routine's winning one, at one to three stages in
+        // flight, through cmma and mma.
+        let boxes = Self::PACKED_BOXES.into_iter().chain([((2, 8), (2, 2)), ((4, 8), (2, 2))]);
+        let boxed: Vec<_> = boxes
+            .flat_map(|(steps, planes)| {
+                [StageRing::SINGLE, StageRing::DOUBLE, StageRing::TRIPLE].into_iter().flat_map(
+                    move |ring| {
+                        let cmma = CubeStagedMicrokernelSettings::in_steps(steps, planes, ring);
+                        [cmma, cmma.through(PlaneFragmentTransport::Mma)]
+                    },
+                )
+            })
+            .collect();
         let mut settings = vec![CubeStagedMicrokernelSettings::PACKED];
         for candidate in boxed.chain(Self::packed_one_step_settings()) {
             let merges = candidate.planes_along_k.get() > 1;
