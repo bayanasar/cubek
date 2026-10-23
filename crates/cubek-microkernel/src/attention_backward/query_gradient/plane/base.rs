@@ -77,9 +77,14 @@ impl PlaneQueryGradientMicrokernel {
     /// dim and the steps of the stage's keys, each spanning the value dim whole, walked through all
     /// of `S`.
     pub fn tiling(&self) -> Levels {
+        self.step_tiling().walk_every(&[S])
+    }
+
+    /// The levels inside one stage of one plane's queries: the query gradient's tiling of its
+    /// fragments, one head, the value dim whole. A cube places its planes above them.
+    pub fn step_tiling(&self) -> Levels {
         self.query_gradient
             .tiling_holding(&[(G, 1), (DV, self.score_gradient.tile_extent(DV))])
-            .walk_every(&[S])
     }
 
     /// Queries one plane owns, of one head.
@@ -104,17 +109,21 @@ impl PlaneQueryGradientMicrokernel {
     }
 
     /// Bytes of shared memory one plane holds beside its stages: its staged query and output
-    /// gradient, its windows of the scores, of the gradient against the probabilities and of that
-    /// gradient cast for the fragments, and the fragments the query gradient's scale bounces
-    /// through at once.
+    /// gradient, and what it walks with ([`walk_bytes`](Self::walk_bytes)).
     pub fn window_bytes(&self, item: &AttentionBackwardWorkItem) -> usize {
-        let (queries, keys) = (self.seq_q(), self.seq_kv());
-        let staged = queries * (item.head_dim + item.val_dim) * item.element.size();
-        let windows = queries * keys * (2 * item.sum.size() + item.element.size());
+        let staged = self.seq_q() * (item.head_dim + item.val_dim) * item.element.size();
+        staged + self.walk_bytes(item)
+    }
+
+    /// Bytes of shared memory one plane holds while it walks, wherever its query lies: its windows
+    /// of the scores, of the gradient against the probabilities and of that gradient cast for the
+    /// fragments, and the fragments the query gradient's scale bounces through at once.
+    pub fn walk_bytes(&self, item: &AttentionBackwardWorkItem) -> usize {
+        let windows = self.seq_q() * self.seq_kv() * (2 * item.sum.size() + item.element.size());
         let bounced = self
             .query_gradient
             .scratch_bytes(&item.query_gradient(item.element), self.settings.scratch);
-        staged + windows + bounced
+        windows + bounced
     }
 
     /// `product`'s own levels below the walker's planes, `planes` its counts: its fragments, its

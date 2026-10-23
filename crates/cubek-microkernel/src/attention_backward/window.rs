@@ -1,7 +1,38 @@
 use crate::matmul::MatmulAxes;
 use crate::matmul::dense::plane::PlaneFragmentMicrokernel;
-use cubecl::tile::{Axis, Level, Semiring, Space, Tile};
+use cubecl::tile::{Axis, Level, Region, Semiring, Space, StageStorage, Tile, Walk};
 use cubecl::{self as cubecl, cube, prelude::*};
+
+/// A plane's windows of shared memory between a step's contractions: its scores and the gradient
+/// against its probabilities, summed in `EA`, and the one of them the next contraction loads, cast
+/// to the staged element. The plane meets on `sync_plane` around each.
+#[derive(CubeType, Clone)]
+pub(crate) struct ScoreWindows {
+    pub scores: Tile,
+    pub gradients: Tile,
+    pub cast: Tile,
+}
+
+#[cube]
+impl ScoreWindows {
+    /// The windows of one step of `walk`, laid out along `axes`: every plane's the step holds.
+    pub fn open<EA: Float, ES: Float>(walk: &Walk, #[comptime] axes: Vec<Axis>) -> ScoreWindows {
+        ScoreWindows {
+            scores: Tile::scratch::<EA>(walk, comptime!(axes.clone()), StageStorage::Strided),
+            gradients: Tile::scratch::<EA>(walk, comptime!(axes.clone()), StageStorage::Strided),
+            cast: Tile::scratch::<ES>(walk, axes, StageStorage::Strided),
+        }
+    }
+
+    /// `plane`'s windows.
+    pub fn at(&self, plane: &Region) -> ScoreWindows {
+        ScoreWindows {
+            scores: self.scores.at(plane),
+            gradients: self.gradients.at(plane),
+            cast: self.cast.at(plane),
+        }
+    }
+}
 
 /// `window = lhs · rhs`, summed in `EA` on `product`'s own grid of fragments, placed as `levels`
 /// state it below the walker's planes, then cast into the plane's `window` of shared memory: where

@@ -81,18 +81,21 @@ impl PlaneKeyGradientMicrokernel {
     /// walking its own of them and holding the other's; walked through all of `Q`, and that walk
     /// through every head of the group.
     pub fn tiling(&self) -> Levels {
+        self.step_tiling().walk_every(&[Q]).walk_every(&[G])
+    }
+
+    /// The levels inside one stage of one plane's keys: one grid of fragments of both gradients,
+    /// of one head's queries. A cube places its planes above them.
+    pub fn step_tiling(&self) -> Levels {
         let [(_, keys), (_, columns), (_, queries)] = self.key_gradient.instruction.shape();
         let (key_gradient, value_gradient) =
             (self.key_gradient.settings, self.value_gradient.settings);
-        Levels::leaf(&[(S, keys), (G, 1), (Q, queries), (D, columns), (DV, columns)])
-            .walk(&[
-                (S, key_gradient.along_m.get()),
-                (Q, key_gradient.depth.get()),
-                (D, key_gradient.along_n.get()),
-                (DV, value_gradient.along_n.get()),
-            ])
-            .walk_every(&[Q])
-            .walk_every(&[G])
+        Levels::leaf(&[(S, keys), (G, 1), (Q, queries), (D, columns), (DV, columns)]).walk(&[
+            (S, key_gradient.along_m.get()),
+            (Q, key_gradient.depth.get()),
+            (D, key_gradient.along_n.get()),
+            (DV, value_gradient.along_n.get()),
+        ])
     }
 
     /// Keys one plane owns, of one key head.
@@ -115,20 +118,25 @@ impl PlaneKeyGradientMicrokernel {
         Self::grid_levels(self.score_gradient, planes)
     }
 
-    /// Bytes of shared memory one plane holds beside its stages: its staged keys and values, its
-    /// windows of the scores and of the gradient against the probabilities, the window either is
-    /// cast into for the fragments, and the fragments the two gradients bounce through at once.
+    /// Bytes of shared memory one plane holds beside its stages: its staged keys and values, and
+    /// what it walks with ([`walk_bytes`](Self::walk_bytes)).
     pub fn window_bytes(&self, item: &AttentionBackwardWorkItem) -> usize {
-        let (keys, queries) = (self.seq_kv(), self.seq_q());
-        let staged = keys * (item.head_dim + item.val_dim) * item.element.size();
-        let windows = keys * queries * (2 * item.sum.size() + item.element.size());
+        let staged = self.seq_kv() * (item.head_dim + item.val_dim) * item.element.size();
+        staged + self.walk_bytes(item)
+    }
+
+    /// Bytes of shared memory one plane holds while it walks, wherever its keys lie: its windows
+    /// of the scores and of the gradient against the probabilities, the window either is cast into
+    /// for the fragments, and the fragments the two gradients bounce through at once.
+    pub fn walk_bytes(&self, item: &AttentionBackwardWorkItem) -> usize {
+        let windows = self.seq_kv() * self.seq_q() * (2 * item.sum.size() + item.element.size());
         let bounced = self
             .key_gradient
             .scratch_bytes(&item.key_gradient(item.element), self.settings.scratch)
             + self
                 .value_gradient
                 .scratch_bytes(&item.value_gradient(item.element), self.settings.scratch);
-        staged + windows + bounced
+        windows + bounced
     }
 
     /// `product`'s own levels below the walker's planes, `planes` its counts: its fragments, its
