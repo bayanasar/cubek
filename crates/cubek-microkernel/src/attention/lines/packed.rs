@@ -2,21 +2,26 @@ use crate::attention::{S, StepLines, StepLinesExpand, StepWalk};
 use cubecl::tile::{Region, Tile};
 use cubecl::{self as cubecl, cube, prelude::*};
 
-/// The keys of a packed cache, read as lines, decoding as they are read ([`Tile::decoded`]).
+/// The keys or the values of a packed cache, read as lines, decoding as they are read
+/// ([`Tile::decoded`]): each operand's codebook indices, under its norms.
 ///
-/// With the QJL fix-up, the lines run twice the head dim: the first half the keys' tile, the
-/// second the fix-up's, the same words read through the sign codebook under each key's residual
-/// length. A query whose second half is its projection then scores both terms in one dot. Both
-/// tiles span the kernel's head axis, so a key's row of each is the step's `lines` long, its
-/// first half the key's coordinates.
+/// With the QJL fix-up, the keys' lines run twice the head dim: the first half the keys' tile,
+/// the second the fix-up's, the same words read through the sign codebook under each key's
+/// residual length. A query whose second half is its projection then scores both terms in one
+/// dot.
+///
+/// A step's window holds one batch and one head, so a key is a row of it, read a line at a time:
+/// the row's address and norm are computed once for all its lines. A line is read only where it
+/// lies in the head dim and its key is attended, so the decoded read skips the bounds test it
+/// would repeat.
 #[derive(CubeType, Clone)]
-pub struct PackedKeyLines {
-    pub keys: Tile,
+pub struct PackedLines {
+    pub tile: Tile,
     pub fixup: ComptimeOption<Tile>,
 }
 
 #[cube]
-impl<N: Size> StepLines<N> for PackedKeyLines {
+impl<N: Size> StepLines<N> for PackedLines {
     type Element = f32;
 
     fn load(
@@ -26,14 +31,14 @@ impl<N: Size> StepLines<N> for PackedKeyLines {
         #[comptime] lines: usize,
     ) -> Array<Vector<f32, N>> {
         let qjl = self.fixup.is_some();
-        let keys = self.keys.at(step);
-        // Without a fix-up, the keys stand in for it, and are never read through it.
+        let window = self.tile.at(step);
+        // Without a fix-up, the operand stands in for it, and is never read through it.
         let fixup = if comptime!(qjl) {
             self.fixup.clone().unwrap().at(step)
         } else {
-            keys.clone()
+            window.clone()
         };
-        let (keys, fixup) = (keys.decoded::<f32, N>(), fixup.decoded::<f32, N>());
+        let (read, fixup) = (window.decoded::<f32, N>(), fixup.decoded::<f32, N>());
         let half = comptime!(if qjl { lines / 2 } else { lines });
         let first_key = step.origin(S);
         let (teams, keys_in_flight) = comptime!((walk.teams, walk.keys_in_flight));
@@ -51,12 +56,12 @@ impl<N: Size> StepLines<N> for PackedKeyLines {
                 if line < lines && seen {
                     if comptime!(qjl) {
                         if line < half {
-                            value = keys.read(at * lines + line);
+                            value = read.read_unchecked(at, line);
                         } else {
-                            value = fixup.read(at * lines + line - half);
+                            value = fixup.read_unchecked(at, line - half);
                         }
                     } else {
-                        value = keys.read(at * lines + line);
+                        value = read.read_unchecked(at, line);
                     }
                 }
                 loaded[c * per_key + p] = value;
@@ -65,9 +70,9 @@ impl<N: Size> StepLines<N> for PackedKeyLines {
         loaded
     }
 
-    fn at(&self, region: &Region) -> PackedKeyLines {
-        PackedKeyLines {
-            keys: self.keys.at(region),
+    fn at(&self, region: &Region) -> PackedLines {
+        PackedLines {
+            tile: self.tile.at(region),
             fixup: self.fixup.clone().map(|fixup| fixup.at(region)),
         }
     }

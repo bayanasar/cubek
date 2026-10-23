@@ -3,25 +3,13 @@ use core::marker::PhantomData;
 use cubecl::tile::{Region, Tile};
 use cubecl::{self as cubecl, cube, prelude::*};
 
-/// An operand's lines, read where they lie through its tile at `E`: the element it holds, or `f32`
-/// for a packed one, decoded as it is read ([`Tile::decoded`]).
+/// A float operand's lines, read where they lie through its tile, at `E`, the element it holds.
 #[derive(CubeType, Clone)]
 #[expand(derive(Clone))]
 pub struct TileLines<E: Float> {
     pub tile: Tile,
     #[cube(comptime)]
     pub element: PhantomData<E>,
-}
-
-#[cube]
-impl<E: Float> TileLines<E> {
-    /// The lines of `tile`, read at `E`.
-    pub fn new(tile: Tile) -> TileLines<E> {
-        TileLines::<E> {
-            tile,
-            element: PhantomData,
-        }
-    }
 }
 
 #[cube]
@@ -35,7 +23,7 @@ impl<E: Float, N: Size> StepLines<N> for TileLines<E> {
         #[comptime] lines: usize,
     ) -> Array<Vector<E, N>> {
         let window = self.tile.at(step);
-        let read = window.decoded::<E, N>();
+        let read = window.flat::<E, N>();
         let first_key = step.origin(S);
         let (teams, keys_in_flight) = comptime!((walk.teams, walk.keys_in_flight));
         let units_per_key = comptime!(walk.units_per_key);

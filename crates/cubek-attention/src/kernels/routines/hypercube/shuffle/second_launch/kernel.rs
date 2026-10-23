@@ -6,9 +6,7 @@ use cubecl::{self as cubecl, cube, prelude::*};
 use cubek_microkernel::attention::cube::cube_unstaged_attention_partial_microkernel;
 use cubek_microkernel::attention::hypercube::HypercubeMergeShape;
 use cubek_microkernel::attention::plane::PlaneShuffleAttention;
-use cubek_microkernel::attention::{
-    AttentionVisibility, B, PackedKeyLines, TileLines, VisibleKeys,
-};
+use cubek_microkernel::attention::{AttentionVisibility, B, PackedLines, TileLines, VisibleKeys};
 
 /// Every cube walking its run of its box over the keys its queries see, its planes reading the
 /// keys and values from tiles, leaving its partial in its slot for a second launch to merge.
@@ -76,7 +74,7 @@ pub fn hypercube_attention_partial_kernel<EA: Float, E: Float, N: Size>(
 }
 
 /// [`hypercube_attention_partial_kernel`] over a packed cache, its planes decoding the keys and
-/// values as they read them ([`PackedKeyLines`], [`TileLines`]).
+/// values as they read them ([`PackedLines`]).
 #[cube(launch_unchecked)]
 #[allow(clippy::too_many_arguments)]
 pub fn hypercube_attention_partial_packed_kernel<EA: Float, E: Float, N: Size>(
@@ -96,11 +94,14 @@ pub fn hypercube_attention_partial_packed_kernel<EA: Float, E: Float, N: Size>(
     #[comptime] visibility: AttentionVisibility,
     #[define(EA, E)] _elements: [ElemType; 2],
 ) {
-    let key = PackedKeyLines {
-        keys: key.tile(&partitioning),
+    let key = PackedLines {
+        tile: key.tile(&partitioning),
         fixup: key_fixup.map(|fixup| fixup.tile(&partitioning)),
     };
-    let value = TileLines::<f32>::new(value.tile(&partitioning));
+    let value = PackedLines {
+        tile: value.tile(&partitioning),
+        fixup: ComptimeOption::new_None(),
+    };
     // The cube level's walk: this cube's run of the steps, or pages, of keys.
     let run = partitioning.walk();
     let first_step = run.region(0);
@@ -116,8 +117,8 @@ pub fn hypercube_attention_partial_packed_kernel<EA: Float, E: Float, N: Size>(
         EA,
         E,
         N,
-        PackedKeyLines,
-        TileLines<f32>,
+        PackedLines,
+        PackedLines,
         PlaneShuffleAttention<EA, N>,
     >(
         run,
