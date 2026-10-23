@@ -769,12 +769,12 @@ impl Microkernel for CubeStagedMicrokernel {
                 filled_by_tma((2, 16, 2), (8, 1), double, 0),
                 filled_by_tma((2, 16, 2), (4, 2), StageRing::TRIPLE, 0),
                 stored_by_tma(filled_by_tma((2, 4, 4), (2, 2), StageRing::TRIPLE, 1)),
-                // MEASURE ONLY: the TMA boxes with their planes splitting K.
-                filled_by_tma((2, 8, 4), (2, 2), StageRing::TRIPLE, 1).split_along_k(2),
-                filled_by_tma((2, 8, 4), (1, 2), StageRing::TRIPLE, 1).split_along_k(2),
-                filled_by_tma((2, 8, 4), (2, 1), StageRing::TRIPLE, 1).split_along_k(2),
-                filled_by_tma((2, 4, 4), (2, 2), StageRing::TRIPLE, 1).split_along_k(2),
-                filled_by_tma((4, 8, 2), (2, 2), StageRing::TRIPLE, 0).split_along_k(2),
+                // MEASURE ONLY: the TMA boxes with their planes splitting K, shallow enough to fit.
+                filled_by_tma((2, 8, 2), (2, 2), double, 1).split_along_k(2),
+                filled_by_tma((2, 8, 2), (2, 1), double, 1).split_along_k(2),
+                filled_by_tma((2, 4, 2), (2, 2), double, 1).split_along_k(2),
+                filled_by_tma((2, 8, 1), (2, 2), StageRing::TRIPLE, 1).split_along_k(2),
+                filled_by_tma((2, 4, 4), (2, 1), double, 1).split_along_k(2),
             ]
         });
         let wgmma = (hw.bulk_tensor_copy()
