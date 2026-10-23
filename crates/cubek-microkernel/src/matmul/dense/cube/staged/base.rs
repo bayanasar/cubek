@@ -163,7 +163,7 @@ impl CubeStagedMicrokernel {
             })
             .collect();
         let mut settings = vec![CubeStagedMicrokernelSettings::PACKED];
-        for candidate in boxed.chain(Self::packed_one_step_settings()) {
+        for candidate in boxed.into_iter().chain(Self::packed_one_step_settings()) {
             let merges = candidate.planes_along_k.get() > 1;
             if (!merges || hw.shared_f32_atomic_add()) && !settings.contains(&candidate) {
                 settings.push(candidate);
