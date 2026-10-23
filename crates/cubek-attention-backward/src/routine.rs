@@ -32,17 +32,20 @@ impl<M> AttentionBackwardMicrokernel for M where
 }
 
 /// One launch of a routine: its microkernel, the partitioning that places its work items, the
-/// width each operand binds at, and the grid it spawns.
+/// width each operand binds at, the grid it spawns, and how the routine lays out the shared
+/// memory the walk holds; `()` for one that holds none.
 #[derive(Debug, Clone)]
-pub struct AttentionBackwardWalk<M> {
+pub struct AttentionBackwardWalk<M, SM = ()> {
     pub microkernel: M,
     pub partitioning: Partitioning,
     pub widths: AttentionBackwardOperands<usize>,
     pub grid: Grid,
+    pub shared_memory: SM,
 }
 
-impl<M: AttentionBackwardMicrokernel> AttentionBackwardWalk<M> {
-    /// `microkernel` placed by `partitioning` on `grid`, its widths settled.
+impl<M: AttentionBackwardMicrokernel, SM> AttentionBackwardWalk<M, SM> {
+    /// `microkernel` placed by `partitioning` on `grid`, shared memory laid out as
+    /// `shared_memory`, its widths settled.
     ///
     /// To the requirements the microkernel enqueues, the binding adds its own: each operand's
     /// buffer alignment, where its view starts, and the masking of an operand whose innermost
@@ -54,6 +57,7 @@ impl<M: AttentionBackwardMicrokernel> AttentionBackwardWalk<M> {
         microkernel: M,
         partitioning: Partitioning,
         grid: Grid,
+        shared_memory: SM,
     ) -> Self {
         let mut vectorization = Vectorization::new();
         microkernel.vectorize(&partitioning, &mut vectorization);
@@ -74,13 +78,14 @@ impl<M: AttentionBackwardMicrokernel> AttentionBackwardWalk<M> {
                 vectorization.require(VectorRequirement::Masked { operand });
             }
         }
-        let widths =
-            elements.map(|operand, element| vectorization.width(operand, |_| hw.vector_ceiling(element)));
+        let widths = elements
+            .map(|operand, element| vectorization.width(operand, |_| hw.vector_ceiling(element)));
         Self {
             microkernel,
             partitioning,
             widths,
             grid,
+            shared_memory,
         }
     }
 
@@ -102,10 +107,17 @@ impl<M: AttentionBackwardMicrokernel> AttentionBackwardWalk<M> {
 /// gradient and each one's dot product, then the walk owned by the keys, which reads the dot
 /// products and writes the keys' and the values' gradients.
 #[derive(Debug, Clone)]
-pub struct AttentionBackwardBlueprint<QM, KM> {
-    pub query_gradient: AttentionBackwardWalk<QM>,
-    pub key_gradient: AttentionBackwardWalk<KM>,
+pub struct AttentionBackwardBlueprint<QM, KM, SM = ()> {
+    pub query_gradient: AttentionBackwardWalk<QM, SM>,
+    pub key_gradient: AttentionBackwardWalk<KM, SM>,
 }
+
+/// What routine `R` compiles.
+pub type AttentionBackwardRoutineBlueprint<R> = AttentionBackwardBlueprint<
+    <R as AttentionBackwardRoutine>::QueryGradient,
+    <R as AttentionBackwardRoutine>::KeyGradient,
+    <R as AttentionBackwardRoutine>::SharedMemory,
+>;
 
 /// A routine of this kind: its two walks prepared for a problem, then launched in order.
 ///
@@ -117,6 +129,8 @@ pub trait AttentionBackwardRoutine {
     type Settings: core::fmt::Debug + Clone + core::fmt::Display + PartialEq;
     type QueryGradient: AttentionBackwardMicrokernel;
     type KeyGradient: AttentionBackwardMicrokernel;
+    /// How a walk lays out the shared memory it holds; `()` for one that holds none.
+    type SharedMemory;
 
     /// The settings worth measuring on this device, the one a caller gets by default first.
     fn settings(&self, hw: &Hardware) -> Vec<Self::Settings>;
@@ -131,13 +145,13 @@ pub trait AttentionBackwardRoutine {
         hw: &Hardware,
         problem: &AttentionBackwardProblem,
         settings: &Self::Settings,
-    ) -> Result<AttentionBackwardBlueprint<Self::QueryGradient, Self::KeyGradient>, Refusal>;
+    ) -> Result<AttentionBackwardRoutineBlueprint<Self>, Refusal>;
 
     /// Launch both walks `blueprint` compiles, the queries' first, over `tensors`.
     fn dispatch(
         &self,
         tensors: &AttentionBackwardTensors,
-        blueprint: AttentionBackwardBlueprint<Self::QueryGradient, Self::KeyGradient>,
+        blueprint: AttentionBackwardRoutineBlueprint<Self>,
     );
 
     /// The gradients `tensors` state, launched on their client's device, prepared for `hw`.

@@ -34,22 +34,24 @@ impl AttentionBackwardWorkItem {
     }
 
     /// The query's gradient, `score_gradient · key`: rows `Q` by columns `D`, contracting `S`, out
-    /// of the score's gradient its owner keeps. The keys lie contiguous along `D`, the columns.
-    pub fn query_gradient(&self) -> MatmulWorkItem {
-        self.kept_product(Q, D, S)
+    /// of the score's gradient its owner keeps at `kept`. The keys lie contiguous along `D`, the
+    /// columns.
+    pub fn query_gradient(&self, kept: ElemType) -> MatmulWorkItem {
+        self.kept_product(Q, D, S, kept)
     }
 
     /// The keys' gradient, `score_gradientᵀ · query`: rows `S` by columns `D`, contracting `Q`, out
-    /// of the score's gradient its owner keeps keys first. The queries lie contiguous along `D`.
-    pub fn key_gradient(&self) -> MatmulWorkItem {
-        self.kept_product(S, D, Q)
+    /// of the score's gradient its owner keeps keys first at `kept`. The queries lie contiguous
+    /// along `D`.
+    pub fn key_gradient(&self, kept: ElemType) -> MatmulWorkItem {
+        self.kept_product(S, D, Q, kept)
     }
 
     /// The values' gradient, `probabilitiesᵀ · out_gradient`: rows `S` by columns `DV`, contracting
-    /// `Q`, out of the probabilities their owner keeps keys first. The output's gradient lies
-    /// contiguous along `DV`.
-    pub fn value_gradient(&self) -> MatmulWorkItem {
-        self.kept_product(S, DV, Q)
+    /// `Q`, out of the probabilities their owner keeps keys first at `kept`. The output's gradient
+    /// lies contiguous along `DV`.
+    pub fn value_gradient(&self, kept: ElemType) -> MatmulWorkItem {
+        self.kept_product(S, DV, Q, kept)
     }
 
     /// The axis a score held with its rows along `rows` has for columns.
@@ -81,12 +83,13 @@ impl AttentionBackwardWorkItem {
         }
     }
 
-    /// A product out of a score its owner keeps, at the sum's element, against a stored rhs
-    /// contiguous along the columns, into a gradient stored at the element.
-    fn kept_product(&self, m: Axis, n: Axis, k: Axis) -> MatmulWorkItem {
+    /// A product out of a score its owner keeps at `kept`, against a stored rhs contiguous along
+    /// the columns, into a gradient stored at the element: a unit keeps its score in registers at
+    /// the sum's element, a plane casts it to the operands' for its fragments to load.
+    fn kept_product(&self, m: Axis, n: Axis, k: Axis, kept: ElemType) -> MatmulWorkItem {
         MatmulWorkItem {
             elements: MatmulOperands {
-                lhs: self.sum,
+                lhs: kept,
                 rhs: self.element,
                 out: self.element,
             },

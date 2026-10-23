@@ -62,9 +62,7 @@ pub fn unit_key_gradient_microkernel<EA: Float>(
             for depth in step.walk() {
                 unit_registers_microkernel(&depth, &score, &key, &query);
             }
-            score
-                .along(Q)
-                .probabilities::<EA>(scale, &bias, &logsumexp);
+            score.along(Q).probabilities::<EA>(scale, &bias, &logsumexp);
             let step_value_sum = value_sum.at(&step);
             for depth in step.walk() {
                 unit_registers_microkernel(&depth, &step_value_sum, &score, &out_gradient);

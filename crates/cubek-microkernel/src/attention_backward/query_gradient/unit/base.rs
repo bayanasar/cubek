@@ -1,7 +1,7 @@
 use crate::attention::{D, DV, G, Q, S};
 use crate::attention_backward::{AttentionBackwardOperand, AttentionBackwardWorkItem};
-use crate::matmul::dense::unit::{UnitRegistersMicrokernel, UnitRegistersMicrokernelSettings};
 use crate::matmul::MatmulOperand;
+use crate::matmul::dense::unit::{UnitRegistersMicrokernel, UnitRegistersMicrokernelSettings};
 use core::num::NonZeroUsize;
 use cubecl::tile::launch::{VectorRequirement, Vectorization};
 use cubecl::tile::{Levels, Partitioning};
@@ -134,7 +134,7 @@ impl Microkernel for UnitQueryGradientMicrokernel {
             );
             let query_gradient = UnitRegistersMicrokernel::best(
                 hw,
-                &item.query_gradient(),
+                &item.query_gradient(item.sum),
                 &block(head, settings.seq_kv),
             );
             Some((score.ok()?, score_gradient.ok()?, query_gradient.ok()?))
@@ -205,7 +205,7 @@ impl Microkernel for UnitQueryGradientMicrokernel {
         let products = [
             (self.score, item.score(Q)),
             (self.score_gradient, item.score_gradient(Q)),
-            (self.query_gradient, item.query_gradient()),
+            (self.query_gradient, item.query_gradient(item.sum)),
         ];
         let mut work = None;
         for (microkernel, product) in products {
@@ -219,4 +219,3 @@ impl Microkernel for UnitQueryGradientMicrokernel {
         estimate.work = work;
     }
 }
-

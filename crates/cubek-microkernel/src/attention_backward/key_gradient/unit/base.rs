@@ -134,10 +134,16 @@ impl Microkernel for UnitKeyGradientMicrokernel {
             let score = UnitRegistersMicrokernel::best(hw, &item.score(S), &block(queries, head));
             let score_gradient =
                 UnitRegistersMicrokernel::best(hw, &item.score_gradient(S), &block(queries, value));
-            let value_gradient =
-                UnitRegistersMicrokernel::best(hw, &item.value_gradient(), &block(value, queries));
-            let key_gradient =
-                UnitRegistersMicrokernel::best(hw, &item.key_gradient(), &block(head, queries));
+            let value_gradient = UnitRegistersMicrokernel::best(
+                hw,
+                &item.value_gradient(item.sum),
+                &block(value, queries),
+            );
+            let key_gradient = UnitRegistersMicrokernel::best(
+                hw,
+                &item.key_gradient(item.sum),
+                &block(head, queries),
+            );
             Some((
                 score.ok()?,
                 score_gradient.ok()?,
@@ -146,13 +152,15 @@ impl Microkernel for UnitKeyGradientMicrokernel {
             ))
         });
         multiplications
-            .map(|(score, score_gradient, value_gradient, key_gradient)| Self {
-                settings,
-                score,
-                score_gradient,
-                value_gradient,
-                key_gradient,
-            })
+            .map(
+                |(score, score_gradient, value_gradient, key_gradient)| Self {
+                    settings,
+                    score,
+                    score_gradient,
+                    value_gradient,
+                    key_gradient,
+                },
+            )
             .into_iter()
     }
 
@@ -214,8 +222,8 @@ impl Microkernel for UnitKeyGradientMicrokernel {
         let products = [
             (self.score, item.score(S)),
             (self.score_gradient, item.score_gradient(S)),
-            (self.value_gradient, item.value_gradient()),
-            (self.key_gradient, item.key_gradient()),
+            (self.value_gradient, item.value_gradient(item.sum)),
+            (self.key_gradient, item.key_gradient(item.sum)),
         ];
         let mut work = None;
         for (microkernel, product) in products {

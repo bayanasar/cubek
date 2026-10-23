@@ -1,13 +1,13 @@
 //! The unit routine against the host's backward pass.
 
 use super::reference::{Case, Reference};
+use core::num::NonZeroUsize;
 use cubecl::client::Client;
 use cubecl::prelude::*;
 use cubek_attention_backward::AttentionBackwardRoutine;
 use cubek_attention_backward::kernels::UnitAttentionBackwardRoutine;
 use cubek_microkernel::attention::AttentionVisibility;
 use cubek_std::Hardware;
-use core::num::NonZeroUsize;
 
 /// Two heads of their own key heads, more keys than queries, and no step that divides the
 /// queries or the keys evenly: every walk's last step is cut short.

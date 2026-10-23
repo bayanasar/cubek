@@ -1,7 +1,7 @@
 use super::kernel::{unit_key_gradient_kernel, unit_query_gradient_kernel};
 use crate::{
     AttentionBackwardBlueprint, AttentionBackwardProblem, AttentionBackwardRoutine,
-    AttentionBackwardTensors, AttentionBackwardWalk,
+    AttentionBackwardRoutineBlueprint, AttentionBackwardTensors, AttentionBackwardWalk,
 };
 use core::num::NonZeroUsize;
 use cubecl::tile::Partitioning;
@@ -58,6 +58,7 @@ impl AttentionBackwardRoutine for UnitAttentionBackwardRoutine {
     type Settings = UnitAttentionBackwardRoutineSettings;
     type QueryGradient = UnitQueryGradientMicrokernel;
     type KeyGradient = UnitKeyGradientMicrokernel;
+    type SharedMemory = ();
 
     /// Each walk's microkernel's settings, the other's and the routine's at their default, then a
     /// cube as full as the device holds ([`Hardware::full_cube_planes`]).
@@ -97,9 +98,10 @@ impl AttentionBackwardRoutine for UnitAttentionBackwardRoutine {
         hw: &Hardware,
         problem: &AttentionBackwardProblem,
         settings: &Self::Settings,
-    ) -> Result<AttentionBackwardBlueprint<Self::QueryGradient, Self::KeyGradient>, Refusal> {
+    ) -> Result<AttentionBackwardRoutineBlueprint<Self>, Refusal> {
         let item = problem.work_item();
-        let query_gradient = UnitQueryGradientMicrokernel::best(hw, &item, &settings.query_gradient)?;
+        let query_gradient =
+            UnitQueryGradientMicrokernel::best(hw, &item, &settings.query_gradient)?;
         let key_gradient = UnitKeyGradientMicrokernel::best(hw, &item, &settings.key_gradient)?;
         let planes = settings.planes.get();
         let plane_width = (hw.properties.hardware.max_units_per_cube / planes as u32)
@@ -122,7 +124,10 @@ impl AttentionBackwardRoutine for UnitAttentionBackwardRoutine {
         );
         let key_partitioning = Partitioning::new(
             problem.space(),
-            key_gradient.tiling().launch_units(&[S, B, KV], cube).build(),
+            key_gradient
+                .tiling()
+                .launch_units(&[S, B, KV], cube)
+                .build(),
         );
         let query_grid = Grid::new(hw, &query_partitioning, resources)?;
         let key_grid = Grid::new(hw, &key_partitioning, resources)?;
@@ -133,6 +138,7 @@ impl AttentionBackwardRoutine for UnitAttentionBackwardRoutine {
                 query_gradient,
                 query_partitioning,
                 query_grid,
+                (),
             ),
             key_gradient: AttentionBackwardWalk::new(
                 hw,
@@ -140,6 +146,7 @@ impl AttentionBackwardRoutine for UnitAttentionBackwardRoutine {
                 key_gradient,
                 key_partitioning,
                 key_grid,
+                (),
             ),
         })
     }
@@ -147,7 +154,7 @@ impl AttentionBackwardRoutine for UnitAttentionBackwardRoutine {
     fn dispatch(
         &self,
         tensors: &AttentionBackwardTensors,
-        blueprint: AttentionBackwardBlueprint<Self::QueryGradient, Self::KeyGradient>,
+        blueprint: AttentionBackwardRoutineBlueprint<Self>,
     ) {
         let problem = tensors.problem();
         let (queries, keys) = (problem.seq_q as u32, problem.seq_kv as u32);

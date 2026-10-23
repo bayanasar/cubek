@@ -122,7 +122,9 @@ impl AttentionBackwardTensors {
         let [_, kv_heads, keys, _] = k_shape.dims::<4>();
         let value_dim = v_shape[3];
         assert!(
-            k_shape[0] == batch && k_shape[3] == head && v_shape.dims::<4>()[..3] == k_shape.dims::<4>()[..3],
+            k_shape[0] == batch
+                && k_shape[3] == head
+                && v_shape.dims::<4>()[..3] == k_shape.dims::<4>()[..3],
             "the keys hold the query's head dim, and the values a row per key"
         );
         assert!(
@@ -135,7 +137,8 @@ impl AttentionBackwardTensors {
             return Err(ATTENTION_BACKWARD_GROUP_UNEVEN);
         }
         let group = heads / kv_heads;
-        let gradient = |shape: [usize; 4]| PlainTensor::empty_contiguous(client, shape.into(), element);
+        let gradient =
+            |shape: [usize; 4]| PlainTensor::empty_contiguous(client, shape.into(), element);
         let (query_gradient, query_gradient_view) = gradient([batch, heads, queries, head]);
         let (key_gradient, key_gradient_view) = gradient([batch, kv_heads, keys, head]);
         let (value_gradient, value_gradient_view) = gradient([batch, kv_heads, keys, value_dim]);
@@ -239,7 +242,7 @@ impl AttentionBackwardTensors {
 
     /// Every operand bound as `walk` states it: under its partitioning, at its widths, on its
     /// grid. A walk passes its kernel the ones it reads and writes.
-    pub fn bind<M>(&self, walk: &AttentionBackwardWalk<M>) -> AttentionBackwardBinding
+    pub fn bind<M, SM>(&self, walk: &AttentionBackwardWalk<M, SM>) -> AttentionBackwardBinding
     where
         M: crate::AttentionBackwardMicrokernel,
     {
@@ -271,9 +274,17 @@ impl AttentionBackwardTensors {
             out_gradient: bind(&views.out_gradient, &[B, KV, G, Q, DV], widths.out_gradient),
             logsumexp: bind(&views.logsumexp, &[B, KV, G, Q], widths.logsumexp),
             delta: bind(&views.delta, &[B, KV, G, Q], widths.delta),
-            query_gradient: bind(&views.query_gradient, &[B, KV, G, Q, D], widths.query_gradient),
+            query_gradient: bind(
+                &views.query_gradient,
+                &[B, KV, G, Q, D],
+                widths.query_gradient,
+            ),
             key_gradient: bind(&views.key_gradient, &[B, KV, S, D], widths.key_gradient),
-            value_gradient: bind(&views.value_gradient, &[B, KV, S, DV], widths.value_gradient),
+            value_gradient: bind(
+                &views.value_gradient,
+                &[B, KV, S, DV],
+                widths.value_gradient,
+            ),
         };
         AttentionBackwardBinding { launcher, operands }
     }
