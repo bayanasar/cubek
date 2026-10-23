@@ -19,6 +19,8 @@
 //! The routines, one folder per scope, are in `kernels`; [`attention_backward`] runs the one
 //! autotune measures fastest.
 
+#[cfg(feature = "benchmarks")]
+pub mod eval;
 pub mod kernels;
 pub mod tune;
 

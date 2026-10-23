@@ -16,6 +16,9 @@ workspace = true
 [features]
 default = ["std", "cubecl/default"]
 std = ["cubecl/std", "cubek-std/std"]
+# Enables `eval::benchmarks`, the catalogue of backward problems and routines the top-level
+# `benchmarks` crate runs.
+benchmarks = ["std", "dep:cubek-test-utils", "dep:half", "cubecl/test-runtime"]
 
 [dependencies]
 cubek-matmul = { workspace = true, features = ["tiled"] }
@@ -23,6 +26,8 @@ cubek-microkernel = { workspace = true, features = ["attention-backward"] }
 cubek-std = { workspace = true }
 
 cubecl = { workspace = true, features = ["stdlib", "tile"] }
+cubek-test-utils = { workspace = true, optional = true }
+half = { workspace = true, optional = true }
 serde = { workspace = true }
 
 [dev-dependencies]

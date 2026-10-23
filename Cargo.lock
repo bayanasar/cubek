@@ -342,6 +342,7 @@ dependencies = [
  "cubecl",
  "cubek",
  "cubek-attention",
+ "cubek-attention-backward",
  "cubek-convolution",
  "cubek-fft",
  "cubek-interpolate",
