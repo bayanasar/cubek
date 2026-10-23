@@ -5,8 +5,10 @@ use cubecl::{self as cubecl, cube, prelude::*};
 
 /// `window = lhs · rhs`, summed in `EA` on `product`'s own grid of fragments, placed as `levels`
 /// state it below the walker's planes, then cast into the plane's `window` of shared memory: where
-/// a plane keeps a score, or the gradient against its probabilities, between two contractions
-/// ([`contract_on_grid`]). The caller meets the plane before the window is read.
+/// a plane keeps a score, or the gradient against its probabilities, between two contractions.
+/// Each fragment of the grid pairs the operands' fragments by position: the lhs's rows by steps of
+/// the contraction, the rhs's columns by the same steps. The caller meets the plane before the
+/// window is read.
 #[cube]
 pub(crate) fn contract_into_window<EA: Float>(
     window: &Tile,
@@ -24,31 +26,6 @@ pub(crate) fn contract_into_window<EA: Float>(
         Semiring::SUM_PROD,
     );
     sum.zero();
-    contract_on_grid(&sum, lhs, rhs, product);
-    let MatmulAxes { m, n, .. } = comptime!(product.axes);
-    let [(_, rows), (_, columns), _] = comptime!(product.instruction.shape());
-    let fragment = comptime!(Level::every(&[(m, rows), (n, columns)]));
-    let (sum_fragments, window_fragments) = (sum.over(&fragment), window.over(&fragment));
-    // The accumulator's fragments and the window are one grid at two depths: the accumulator is
-    // placed on the product's own grid, the window sits under the plane's region, and a region
-    // only windows a tile at its depth.
-    #[unroll]
-    for at in 0..comptime!(product.settings.along_m.get() * product.settings.along_n.get()) {
-        let mut cells = window.at(&window_fragments.region(at));
-        cells.copy_cast_from(&sum.at(&sum_fragments.region(at)));
-    }
-}
-
-/// `sum += lhs · rhs` on `product`'s own grid of fragments, `sum` an accumulator placed on it: each
-/// fragment of the grid pairs the operands' fragments by position, the lhs's rows by steps of the
-/// contraction and the rhs's columns by the same steps.
-#[cube]
-pub(crate) fn contract_on_grid(
-    sum: &Tile,
-    lhs: &Tile,
-    rhs: &Tile,
-    #[comptime] product: PlaneFragmentMicrokernel,
-) {
     let [(_, m), (_, n), (_, k)] = comptime!(product.instruction.shape());
     let MatmulAxes {
         m: rows_axis,
@@ -65,10 +42,8 @@ pub(crate) fn contract_on_grid(
         (columns_axis, n),
         (depth_axis, k)
     ])));
-    let sum_fragments = sum.over(&comptime!(Level::every(&[
-        (rows_axis, m),
-        (columns_axis, n)
-    ])));
+    let fragment = comptime!(Level::every(&[(rows_axis, m), (columns_axis, n)]));
+    let sum_fragments = sum.over(&fragment);
     #[unroll]
     for step in 0..depth {
         #[unroll]
@@ -92,13 +67,22 @@ pub(crate) fn contract_on_grid(
                         (depth_axis, step, depth)
                     ),
                 ));
-                let mut fragment = sum.at(&sum_fragments.region(at_sum));
-                fragment.mma(
+                let mut cells = sum.at(&sum_fragments.region(at_sum));
+                cells.mma(
                     &lhs.at(&lhs_fragments.region(at_lhs)),
                     &rhs.at(&rhs_fragments.region(at_rhs)),
                 );
             }
         }
+    }
+    // The accumulator's fragments and the window are one grid at two depths: the accumulator is
+    // placed on the product's own grid, the window sits under the plane's region, and a region
+    // only windows a tile at its depth.
+    let window_fragments = window.over(&fragment);
+    #[unroll]
+    for at in 0..comptime!(rows * columns) {
+        let mut cells = window.at(&window_fragments.region(at));
+        cells.copy_cast_from(&sum.at(&sum_fragments.region(at)));
     }
 }
 

@@ -1,6 +1,6 @@
 use super::base::PlaneKeyGradientMicrokernel;
-use crate::attention::{D, Q, S};
-use crate::attention_backward::{contract_into_window, contract_on_grid};
+use crate::attention::{D, DV, Q, S};
+use crate::attention_backward::contract_into_window;
 use crate::matmul::dense::plane::plane_fragment_microkernel;
 use crate::matmul::{MatmulOperands, MatmulRead};
 use crate::staging::StageRing;
@@ -54,12 +54,7 @@ pub fn plane_fragment_key_gradient_microkernel<EA: Float, ES: Float>(
         )
         .with_scratch(comptime!(microkernel.settings.scratch));
     key_sum.zero();
-    // The values' gradient, cut to its own grid below the planes' level.
-    let value_window = value_gradient.with_levels(
-        1usize,
-        comptime!(microkernel.value_gradient_levels(&[(S, planes)])),
-    );
-    let mut value_sum = value_window
+    let mut value_sum = value_gradient
         .accumulator::<EA>(
             &scores,
             &out_gradient.at(&first_head),
@@ -112,11 +107,17 @@ pub fn plane_fragment_key_gradient_microkernel<EA: Float, ES: Float>(
                     cast.copy_cast_from(&scores);
                     // The probabilities land before the fragments load them.
                     sync_plane();
-                    contract_on_grid(
-                        &value_sum,
-                        &cast,
+                    // A tile's clone is a handle to the same cells: the shared microkernel reads
+                    // the probabilities and adds into the sum through it.
+                    plane_fragment_microkernel(
+                        stage,
+                        &value_sum.clone(),
+                        &wide,
+                        &cast.clone(),
                         out_gradient,
-                        comptime!(microkernel.value_gradient),
+                        comptime!(microkernel.value_gradient.tile_instruction()),
+                        comptime!(Some(D)),
+                        comptime!(MatmulOperands::all(MatmulRead::AsBound)),
                     );
                     contract_into_window::<EA>(
                         &gradients,
@@ -144,7 +145,7 @@ pub fn plane_fragment_key_gradient_microkernel<EA: Float, ES: Float>(
                         &cast.clone(),
                         query,
                         comptime!(microkernel.key_gradient.tile_instruction()),
-                        comptime!(None),
+                        comptime!(Some(DV)),
                         comptime!(MatmulOperands::all(MatmulRead::AsBound)),
                     );
                 });
@@ -158,5 +159,5 @@ pub fn plane_fragment_key_gradient_microkernel<EA: Float, ES: Float>(
     }
     key_sum.along(D).mul(&scales);
     key_sum.drained_into(key_gradient);
-    value_sum.drained_into(&value_window);
+    value_sum.drained_into(value_gradient);
 }

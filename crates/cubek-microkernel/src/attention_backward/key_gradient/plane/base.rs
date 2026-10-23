@@ -1,4 +1,4 @@
-use crate::attention::{DV, G, Q, S};
+use crate::attention::{D, DV, G, Q, S};
 use crate::attention_backward::{AttentionBackwardOperand, AttentionBackwardWorkItem};
 use crate::matmul::dense::plane::{
     PlaneFragmentInstruction, PlaneFragmentMicrokernel, PlaneFragmentMicrokernelSettings,
@@ -76,12 +76,21 @@ impl core::fmt::Display for PlaneKeyGradientMicrokernelSettings {
 
 impl PlaneKeyGradientMicrokernel {
     /// The levels inside one plane's keys, which a routine states the rest of the partitioning
-    /// around: a stage of queries of one head, the keys' gradient's tiling of its fragments of keys
-    /// by the head dim and the steps of the stage's queries, each spanning the value dim whole,
-    /// walked through all of `Q`, and that walk through every head of the group.
+    /// around: a stage of queries of one head, one grid of fragments of both gradients, its keys
+    /// by the head dim and the value dim and the steps of the stage's queries, each gradient
+    /// walking its own of them and holding the other's; walked through all of `Q`, and that walk
+    /// through every head of the group.
     pub fn tiling(&self) -> Levels {
-        self.key_gradient
-            .tiling_holding(&[(G, 1), (DV, self.value_gradient.tile_extent(DV))])
+        let [(_, keys), (_, columns), (_, queries)] = self.key_gradient.instruction.shape();
+        let (key_gradient, value_gradient) =
+            (self.key_gradient.settings, self.value_gradient.settings);
+        Levels::leaf(&[(S, keys), (G, 1), (Q, queries), (D, columns), (DV, columns)])
+            .walk(&[
+                (S, key_gradient.along_m.get()),
+                (Q, key_gradient.depth.get()),
+                (D, key_gradient.along_n.get()),
+                (DV, value_gradient.along_n.get()),
+            ])
             .walk_every(&[Q])
             .walk_every(&[G])
     }
@@ -104,11 +113,6 @@ impl PlaneKeyGradientMicrokernel {
     /// The grid of the gradient against the probabilities below the walker's level of planes.
     pub fn score_gradient_levels(&self, planes: &[(Axis, usize)]) -> Vec<Level> {
         Self::grid_levels(self.score_gradient, planes)
-    }
-
-    /// The values' gradient's grid below the walker's level of planes.
-    pub fn value_gradient_levels(&self, planes: &[(Axis, usize)]) -> Vec<Level> {
-        Self::grid_levels(self.value_gradient, planes)
     }
 
     /// Bytes of shared memory one plane holds beside its stages: its staged keys and values, its
