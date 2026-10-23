@@ -185,19 +185,8 @@ fn one_query(
             AttentionRoutineCandidate::list(HypercubeLastArrivalShuffleAttentionRoutine::new(), hw),
             launch,
         )
-        .prioritized(
-            &routines,
-            AttentionRoutineCandidate::list(
-                HypercubeSecondLaunchShuffleAttentionRoutine::new(),
-                hw,
-            ),
-            launch,
-        )
-        .prioritized(
-            &routines,
-            AttentionRoutineCandidate::list(CubeShuffleAttentionRoutine, hw),
-            launch,
-        );
+        // MEASURE ONLY: the last arrival alone.
+        ;
     if hw.plane_dim().is_err() {
         autotune = autotune.prioritized(
             &routines,
