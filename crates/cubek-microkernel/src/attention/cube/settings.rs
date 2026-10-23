@@ -160,8 +160,22 @@ impl CubeAttentionPlaneSettings for PlaneFragmentAttentionMicrokernelSettings {
                 layout: CubeAttentionStageLayout::SwizzledBlocks,
                 ..fragments(rows, keys)
             });
+        // MEASURE ONLY: the swizzled one-by-eight box crossed with the heads, the planes along the
+        // queries and the rings.
+        let winner = swizzled[2];
+        let crossed = [
+            CubeAttentionMicrokernelSettings { heads: count(2), ..winner },
+            CubeAttentionMicrokernelSettings { heads: count(8), ..winner },
+            CubeAttentionMicrokernelSettings { planes_along_queries: count(2), ..winner },
+            CubeAttentionMicrokernelSettings { planes_along_queries: count(2), heads: count(2), ..winner },
+            CubeAttentionMicrokernelSettings { ring: StageRing::DOUBLE, ..winner },
+            CubeAttentionMicrokernelSettings { ring: StageRing::DOUBLE_THROUGH_REGISTERS, ..winner },
+            CubeAttentionMicrokernelSettings { layout: CubeAttentionStageLayout::SwizzledBlocks, ..fragments(1, 4) },
+            CubeAttentionMicrokernelSettings { layout: CubeAttentionStageLayout::SwizzledBlocks, heads: count(2), ..fragments(1, 4) },
+        ];
         [lead, fragments(2, 2), fragments(2, 4)]
             .into_iter()
+            .chain(crossed)
             .chain(wide)
             .chain(heads)
             .chain(split)
