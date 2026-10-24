@@ -156,8 +156,8 @@ impl CubeStagedMicrokernel {
                     CubeStagedMicrokernelSettings::in_steps(steps, planes, ring)
                 })
             });
-        // MEASURE ONLY: the packed boxes filled by planes set aside, which decode as the rest
-        // contract.
+        // MEASURE ONLY: the packed boxes with their next stage's words waiting in registers while
+        // the planes contract the current one.
         let set_aside = [
             ((4, 4), (2, 2)),
             ((4, 2), (2, 2)),
@@ -167,14 +167,13 @@ impl CubeStagedMicrokernel {
         .into_iter()
         .flat_map(|(steps, planes)| {
             [
-                (StageRing::DOUBLE, 1),
-                (StageRing::TRIPLE, 1),
-                (StageRing::TRIPLE, 2),
+                StageRing::DOUBLE_THROUGH_REGISTERS,
+                StageRing::SINGLE_THROUGH_REGISTERS,
             ]
-            .map(|(ring, filling)| {
-                CubeStagedMicrokernelSettings::in_steps(steps, planes, ring)
-                    .through(PlaneFragmentTransport::Mma)
-                    .filled(CubeStagedDelivery::Copy, filling)
+            .into_iter()
+            .flat_map(move |ring| {
+                let settings = CubeStagedMicrokernelSettings::in_steps(steps, planes, ring);
+                [settings, settings.through(PlaneFragmentTransport::Mma)]
             })
         });
         let mut settings = vec![CubeStagedMicrokernelSettings::PACKED];
