@@ -126,9 +126,13 @@ impl Routine for HypercubeRelayMatmulRoutine {
             on(Shared::deep(4, (2, 2)).rows_in_order(), 4),
             on(Shared::DEEP_ALONG_M.rows_in_order(), 4),
         ];
+        let tma = tma_boxes()
+            .into_iter()
+            .flat_map(move |shared| [2, 3, 4].map(move |cubes| on(shared, cubes)));
         [lead]
             .into_iter()
             .chain(star)
+            .chain(tma)
             .chain(cube_orders)
             .chain(split_boxes)
             .chain(deep_boxes)
@@ -291,6 +295,33 @@ impl MatmulRoutine<HypercubeStagedMicrokernel, StageStorage> for HypercubeRelayM
             }
         }
     }
+}
+
+/// MEASURE ONLY: the staged cube's TMA boxes that set no plane aside, for a hypercube's cubes.
+pub(crate) fn tma_boxes() -> [HypercubeStagedMicrokernelSettings; 5] {
+    use cubek_microkernel::matmul::dense::cube::CubeStagedMicrokernelSettings as Cube;
+    use cubek_microkernel::matmul::dense::plane::{
+        PlaneFragmentMicrokernelSettings as Plane, PlaneFragmentTransport,
+    };
+    use cubek_microkernel::matmul::staged_walk::MatmulPlaneLayout;
+    let tma = |grid: (usize, usize, usize), planes: (usize, usize), ring| {
+        HypercubeStagedMicrokernelSettings {
+            cube: Cube::boxed(
+                Plane::grid(grid.0, grid.1, grid.2),
+                MatmulPlaneLayout::new(planes.0, planes.1),
+            )
+            .ringed(ring)
+            .through(PlaneFragmentTransport::Mma)
+            .filled(CubeStagedDelivery::Tma, 0),
+        }
+    };
+    [
+        tma((2, 16, 2), (4, 1), StageRing::DOUBLE),
+        tma((4, 8, 2), (2, 2), StageRing::TRIPLE),
+        tma((2, 8, 4), (2, 2), StageRing::TRIPLE),
+        tma((2, 8, 2), (2, 2), StageRing::DOUBLE),
+        tma((2, 4, 4), (2, 2), StageRing::TRIPLE),
+    ]
 }
 
 #[cfg(test)]

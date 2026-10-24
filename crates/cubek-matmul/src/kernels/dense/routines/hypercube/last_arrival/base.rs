@@ -151,7 +151,21 @@ impl Routine for HypercubeLastArrivalMatmulRoutine {
             microkernel,
             ..lead
         });
-        [lead].into_iter().chain(counts).chain(boxes).collect()
+        let tma = super::super::relay::tma_boxes()
+            .into_iter()
+            .flat_map(move |microkernel| {
+                [1, 2].map(move |cubes| Self::Settings {
+                    microkernel,
+                    cubes_per_worker: NonZeroUsize::new(cubes).unwrap(),
+                    ..lead
+                })
+            });
+        [lead]
+            .into_iter()
+            .chain(counts)
+            .chain(boxes)
+            .chain(tma)
+            .collect()
     }
 
     /// Nothing of its own: it only distributes the cubes, and their microkernel makes every
