@@ -771,36 +771,16 @@ impl Microkernel for CubeStagedMicrokernel {
                 stored_by_tma(filled_by_tma((2, 4, 4), (2, 2), StageRing::TRIPLE, 1)),
             ]
         });
-        // MEASURE ONLY: wider plane tiles and deeper rings for the long prefill projections.
-        let quad = StageRing {
-            stages_in_flight: count(4),
-            ..StageRing::TRIPLE
-        };
+        // MEASURE ONLY: the sweep's winner, stored by the TMA engine too, and its neighbours.
         let sweep = hw.bulk_tensor_copy().then(|| {
             [
-                (4, 8, 2),
-                (4, 8, 4),
-                (2, 16, 4),
-                (4, 16, 2),
-                (8, 4, 2),
-                (4, 4, 4),
+                filled_by_tma((4, 4, 4), (2, 4), StageRing::TRIPLE, 1),
+                stored_by_tma(filled_by_tma((4, 4, 4), (2, 4), StageRing::TRIPLE, 1)),
+                stored_by_tma(filled_by_tma((4, 4, 4), (2, 4), StageRing::TRIPLE, 0)),
+                filled_by_tma((4, 4, 4), (4, 2), StageRing::TRIPLE, 1),
+                stored_by_tma(filled_by_tma((4, 4, 4), (4, 2), StageRing::TRIPLE, 1)),
+                filled_by_tma((4, 4, 2), (2, 4), StageRing::TRIPLE, 1),
             ]
-            .into_iter()
-            .flat_map(move |grid| {
-                [(2, 2), (2, 4), (4, 2), (2, 1), (1, 2)]
-                    .into_iter()
-                    .flat_map(move |planes| {
-                        [
-                            (double, 0),
-                            (StageRing::TRIPLE, 0),
-                            (StageRing::TRIPLE, 1),
-                            (quad, 0),
-                            (quad, 1),
-                        ]
-                        .map(move |(ring, filling)| filled_by_tma(grid, planes, ring, filling))
-                    })
-            })
-            .collect::<Vec<_>>()
         });
         let wgmma = (hw.bulk_tensor_copy()
             && hw.properties.features.matmul.wgmma.iter().next().is_some())
