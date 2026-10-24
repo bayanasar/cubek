@@ -157,7 +157,30 @@ impl CubeStagedMicrokernel {
                 })
             });
         let mut settings = vec![CubeStagedMicrokernelSettings::PACKED];
-        for candidate in boxed.chain(Self::packed_one_step_settings()) {
+        // PROBE: Marlin-shaped settings where the environment asks for the stored stage: one plane
+        // along the rows, so no two planes decode the same weights, each plane tall along them, so a
+        // decoded fragment serves many rows, through the mma transport.
+        let mut stored_stage = Vec::new();
+        if std::env::var_os("PROBE_STORED_STAGE").is_some() {
+            for (rows, columns, depth) in [(4, 4, 2), (4, 8, 2), (4, 8, 4), (8, 4, 2), (8, 8, 2)] {
+                for plane_columns in [2, 4, 8] {
+                    for ring in [StageRing::DOUBLE, StageRing::TRIPLE] {
+                        for delivery in [CubeStagedDelivery::Tma, CubeStagedDelivery::AsyncCopy] {
+                            stored_stage.push(
+                                CubeStagedMicrokernelSettings::boxed(
+                                    PlaneFragmentMicrokernelSettings::grid(rows, columns, depth),
+                                    MatmulPlaneLayout::new(1, plane_columns),
+                                )
+                                .ringed(ring)
+                                .through(PlaneFragmentTransport::Mma)
+                                .filled(delivery, 0),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        for candidate in boxed.chain(Self::packed_one_step_settings()).chain(stored_stage) {
             let merges = candidate.planes_along_k.get() > 1;
             if (!merges || hw.shared_f32_atomic_add()) && !settings.contains(&candidate) {
                 settings.push(candidate);
@@ -192,6 +215,14 @@ impl CubeStagedMicrokernel {
         match (item.blocks, self.walk().decoded()) {
             (None, _) => *item,
             (Some(_), Some(_)) => item.decoded(),
+            // PROBE: a stage held as stored, its fragments decoding it as they load.
+            (Some(_), None)
+                if [self.reads.lhs, self.reads.rhs]
+                    .iter()
+                    .any(|read| matches!(read, MatmulRead::DequantizedAtLoad(_))) =>
+            {
+                *item
+            }
             (Some(_), None) => item
                 .as_stored()
                 .expect("a microkernel staging packed inputs as they lie reads them as stored"),
@@ -233,6 +264,29 @@ impl CubeStagedMicrokernel {
             Some(stored) => Self::as_stored_candidates(hw, &stored, settings).collect(),
             None => Vec::new(),
         };
+        // PROBE: the packed input staged as stored and decoded as each fragment loads, ahead of
+        // every other kind, where the environment asks for it.
+        if std::env::var_os("PROBE_STORED_STAGE").is_some()
+            && item.as_stored().is_none()
+            && settings.ring.prefetch != cubecl::tile::stage::Prefetch::InRegisters
+        {
+            let reads = item.decoding_reads().map(|_, read| match read {
+                MatmulRead::Dequantized(element) => MatmulRead::DequantizedAtLoad(element),
+                read => read,
+            });
+            candidates.extend(
+                Self::as_stored_candidates(hw, item, settings)
+                    .filter(|candidate| {
+                        matches!(candidate.plane.instruction, PlaneFragmentInstruction::Mma { .. })
+                    })
+                    .map(|candidate| Self { reads, ..candidate }),
+            );
+            eprintln!(
+                "PROBE: {} stored-stage candidates, admits {:?}",
+                candidates.len(),
+                PlaneFragmentMicrokernel::admits(item)
+            );
+        }
         candidates.extend(Self::decoding_candidates(hw, item, settings));
         candidates
     }

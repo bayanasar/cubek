@@ -131,9 +131,15 @@ impl PlaneFragmentMicrokernel {
         space: MatmulBlocks,
     ) -> impl Iterator<Item = Self> {
         let shape = Self::decoding_instruction(item.elements.lhs, item.sum);
+        let mut settings = settings;
+        if let Some(depth) = std::env::var("PROBE_DEPTH").ok().and_then(|d| d.parse().ok()) {
+            settings.depth = NonZeroUsize::new(depth).unwrap();
+            settings.fragment_depth = PlaneFragmentDepth::Stage;
+        }
         let window = settings.depth.get() * shape.k as usize;
         let runs_whole = (window / 4).is_multiple_of(space.operand(MatmulOperand::Rhs).read(K));
-        let windowed = settings.along_m == NonZeroUsize::MIN
+        let windowed = (settings.along_m == NonZeroUsize::MIN
+            || std::env::var_os("PROBE_STORED_STAGE").is_some())
             && settings.transport == PlaneFragmentTransport::Mma
             && settings.fragment_depth == PlaneFragmentDepth::Stage;
         let offered = windowed
@@ -141,6 +147,13 @@ impl PlaneFragmentMicrokernel {
             && space.k.is_multiple_of(window)
             && Self::decodes(hw, item.elements.lhs, item.sum);
         let instruction = PlaneFragmentInstruction::Mma { shape };
+        eprintln!(
+            "PROBE packed: settings {settings:?} window {window} runs_whole {runs_whole} read_k {} k {} n {} decodes {}",
+            space.operand(MatmulOperand::Rhs).read(K),
+            space.k,
+            space.n,
+            Self::decodes(hw, item.elements.lhs, item.sum)
+        );
         (1..=settings.along_n.get())
             .rev()
             .filter(move |&along_n| offered && space.n.is_multiple_of(along_n * shape.n as usize))

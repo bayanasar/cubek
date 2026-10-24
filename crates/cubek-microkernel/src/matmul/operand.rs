@@ -94,6 +94,8 @@ pub enum MatmulRead {
     AsBound,
     /// Dequantized at this element.
     Dequantized(ElemType),
+    /// PROBE: dequantized at this element as each fragment loads, its stage holding it as stored.
+    DequantizedAtLoad(ElemType),
 }
 
 impl MatmulRead {
@@ -102,6 +104,7 @@ impl MatmulRead {
         match self {
             Self::AsBound => None,
             Self::Dequantized(element) => Some(element),
+            Self::DequantizedAtLoad(_) => None,
         }
     }
 }
@@ -113,6 +116,7 @@ impl MatmulRead {
         match comptime!(read) {
             MatmulRead::AsBound => operand.clone(),
             MatmulRead::Dequantized(element) => sum.dequantized(operand, element),
+            MatmulRead::DequantizedAtLoad(element) => sum.dequantized(operand, element),
         }
     }
 }
