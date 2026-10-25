@@ -1,5 +1,6 @@
 use super::base::UnitQueryGradientMicrokernel;
-use crate::attention::{D, S};
+use crate::attention::S;
+use crate::attention_backward::drain_scaled;
 use crate::matmul::dense::unit::unit_registers_microkernel;
 use cubecl::tile::{Region, Semiring, Tile};
 use cubecl::{self as cubecl, cube, prelude::*};
@@ -71,11 +72,5 @@ pub fn unit_query_gradient_microkernel<EA: Float>(
             unit_registers_microkernel(&depth, &step_sum, &gradient, &key);
         }
     }
-    let mut scales = Array::<EA>::new(comptime!(microkernel.seq_q()));
-    #[unroll]
-    for q in 0..comptime!(microkernel.seq_q()) {
-        scales[q] = scale;
-    }
-    sum.along(D).mul(&scales);
-    sum.drained_into(query_gradient);
+    drain_scaled::<EA>(&sum, query_gradient, scale, comptime!(microkernel.seq_q()));
 }

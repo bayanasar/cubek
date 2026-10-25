@@ -1,6 +1,7 @@
 use crate::attention::{D, DV, G, Q, S};
-use crate::attention_backward::{AttentionBackwardOperand, AttentionBackwardWorkItem};
-use crate::matmul::MatmulOperand;
+use crate::attention_backward::{
+    AttentionBackwardOperand, AttentionBackwardWorkItem, BoundProduct, estimate_beside,
+};
 use crate::matmul::dense::unit::{UnitRegistersMicrokernel, UnitRegistersMicrokernelSettings};
 use core::num::NonZeroUsize;
 use cubecl::tile::launch::{VectorRequirement, Vectorization};
@@ -160,29 +161,27 @@ impl Microkernel for UnitQueryGradientMicrokernel {
         vectorization: &mut Vectorization<AttentionBackwardOperand>,
     ) {
         use AttentionBackwardOperand as Operand;
-        let products = [
-            (self.score, Some(Operand::Query), Some(Operand::Key), None),
-            (
-                self.score_gradient,
-                Some(Operand::OutGradient),
-                Some(Operand::Value),
-                None,
-            ),
-            (
-                self.query_gradient,
-                None,
-                Some(Operand::Key),
-                Some(Operand::QueryGradient),
-            ),
-        ];
-        for (microkernel, lhs, rhs, out) in products {
-            let mut product = Vectorization::new();
-            microkernel.vectorize(&(), &mut product);
-            vectorization.restate(product, |operand| match operand {
-                MatmulOperand::Lhs => lhs,
-                MatmulOperand::Rhs => rhs,
-                MatmulOperand::Out => out,
-            });
+        for product in [
+            BoundProduct {
+                microkernel: self.score,
+                lhs: Some(Operand::Query),
+                rhs: Some(Operand::Key),
+                out: None,
+            },
+            BoundProduct {
+                microkernel: self.score_gradient,
+                lhs: Some(Operand::OutGradient),
+                rhs: Some(Operand::Value),
+                out: None,
+            },
+            BoundProduct {
+                microkernel: self.query_gradient,
+                lhs: None,
+                rhs: Some(Operand::Key),
+                out: Some(Operand::QueryGradient),
+            },
+        ] {
+            product.restate(vectorization);
         }
         vectorization.require(VectorRequirement::Together {
             operand: Operand::Out,
@@ -202,20 +201,14 @@ impl Microkernel for UnitQueryGradientMicrokernel {
         planes: CubePlanes,
         estimate: &mut KernelEstimate,
     ) {
-        let products = [
-            (self.score, item.score(Q)),
-            (self.score_gradient, item.score_gradient(Q)),
-            (self.query_gradient, item.query_gradient(item.sum)),
-        ];
-        let mut work = None;
-        for (microkernel, product) in products {
-            microkernel.estimate(&product, &(), planes, estimate);
-            let block = estimate.work.take();
-            work = match work {
-                None => block,
-                Some(held) => block.map(|block| held.beside(block)),
-            };
-        }
-        estimate.work = work;
+        estimate_beside(
+            [
+                (self.score, item.score(Q)),
+                (self.score_gradient, item.score_gradient(Q)),
+                (self.query_gradient, item.query_gradient(item.sum)),
+            ],
+            planes,
+            estimate,
+        );
     }
 }

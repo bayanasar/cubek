@@ -79,7 +79,7 @@ impl<M: AttentionBackwardMicrokernel, SM> AttentionBackwardWalk<M, SM> {
             }
         }
         let widths = elements
-            .map(|operand, element| vectorization.width(operand, |_| hw.vector_ceiling(element)));
+            .map(|operand, &element| vectorization.width(operand, |_| hw.vector_ceiling(element)));
         Self {
             microkernel,
             partitioning,

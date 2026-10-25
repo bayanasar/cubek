@@ -1,9 +1,9 @@
 use super::base::CubeQueryGradientMicrokernel;
 use crate::attention::{G, Q, S};
-use crate::attention_backward::ScoreWindows;
 use crate::attention_backward::query_gradient::plane::{
-    plane_query_gradient_step, query_gradient_sum, store_query_gradient,
+    plane_query_gradient_step, query_gradient_sum,
 };
+use crate::attention_backward::{ScoreWindows, drain_scaled};
 use crate::staging::StageRing;
 use cubecl::tile::{Region, StageStorage, Stages, Tile};
 use cubecl::{self as cubecl, cube, prelude::*};
@@ -79,11 +79,11 @@ pub fn cube_staged_query_gradient_microkernel<EA: Float, ES: Float>(
         });
     });
     for plane in cube.planes() {
-        store_query_gradient::<EA>(
+        drain_scaled::<EA>(
             &sum.at(&plane),
             &query_gradient.at(&plane),
             scale,
-            comptime!(microkernel.plane),
+            comptime!(microkernel.plane.seq_q()),
         );
     }
 }

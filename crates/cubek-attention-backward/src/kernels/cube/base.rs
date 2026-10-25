@@ -3,10 +3,9 @@ use crate::{
     AttentionBackwardBlueprint, AttentionBackwardProblem, AttentionBackwardRoutine,
     AttentionBackwardRoutineBlueprint, AttentionBackwardTensors, AttentionBackwardWalk,
 };
-use cubecl::ir::ElemType;
 use cubecl::tile::launch::Refusal;
-use cubecl::tile::{Axis, Partitioning, Space, StageStorage};
-use cubek_microkernel::attention::{B, D, DV, G, KV, Q, S};
+use cubecl::tile::{Partitioning, StageStorage};
+use cubek_microkernel::attention::{B, G, KV, Q, S};
 use cubek_microkernel::attention_backward::key_gradient::cube::{
     CubeKeyGradientMicrokernel, CubeKeyGradientMicrokernelSettings,
 };
@@ -56,22 +55,6 @@ impl core::fmt::Display for CubeStagedAttentionBackwardRoutineSettings {
 }
 
 impl CubeStagedAttentionBackwardRoutine {
-    /// One stage of the operands a walk holds `extent` of along `walked`, a row of each spanning
-    /// `D` and `DV`: the keys and values the first walk stages, or the queries and output
-    /// gradient the second does.
-    fn stage(
-        element: ElemType,
-        (walked, extent): (Axis, usize),
-        problem: &AttentionBackwardProblem,
-    ) -> [StagedOperand; 2] {
-        let operand = |row: Axis, width: usize| StagedOperand {
-            element,
-            space: Space::new(&[(walked, extent), (row, width)]),
-            innermost: row,
-        };
-        [operand(D, problem.head_dim), operand(DV, problem.val_dim)]
-    }
-
     /// The grid and the resolved ring of a walk whose stage is `stage`, filled by `planes` planes
     /// of a cube that holds `window` bytes beside its stages.
     fn grid(
@@ -158,7 +141,7 @@ impl AttentionBackwardRoutine for CubeStagedAttentionBackwardRoutine {
         let (query_grid, query_ring) = Self::grid(
             hw,
             &query_partitioning,
-            &Self::stage(item.element, (S, query_gradient.seq_kv()), problem),
+            &problem.stage(S, query_gradient.seq_kv()),
             settings.ring,
             query_gradient.plane_count(),
             query_gradient.window_bytes(&item),
@@ -166,7 +149,7 @@ impl AttentionBackwardRoutine for CubeStagedAttentionBackwardRoutine {
         let (key_grid, key_ring) = Self::grid(
             hw,
             &key_partitioning,
-            &Self::stage(item.element, (Q, key_gradient.seq_q()), problem),
+            &problem.stage(Q, key_gradient.seq_q()),
             settings.ring,
             key_gradient.plane_count(),
             key_gradient.window_bytes(&item),

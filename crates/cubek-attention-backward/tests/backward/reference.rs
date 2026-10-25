@@ -116,8 +116,9 @@ impl Reference {
                     let max = scores
                         .iter()
                         .flatten()
-                        .cloned()
-                        .fold(f64::NEG_INFINITY, f64::max);
+                        .copied()
+                        .reduce(f64::max)
+                        .unwrap_or(f64::NEG_INFINITY);
                     let lse = max
                         + scores
                             .iter()

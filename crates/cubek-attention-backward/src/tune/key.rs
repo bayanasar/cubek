@@ -3,10 +3,11 @@
 
 use crate::{ATTENTION_BACKWARD_GROUP_UNEVEN, AttentionBackwardProblem};
 use cubecl::ir::ElemType;
+use cubecl::tile::Axis;
 use cubecl::tile::launch::Refusal;
 use cubecl::tile::layout::ElemAlignment;
 use cubecl::{self as cubecl, AutotuneKey};
-use cubek_microkernel::attention::AttentionVisibility;
+use cubek_microkernel::attention::{AttentionVisibility, D, DV};
 use cubek_microkernel::attention_backward::AttentionBackwardOperands;
 use serde::{Deserialize, Serialize};
 
@@ -59,8 +60,12 @@ impl TryFrom<&AttentionBackwardKey> for AttentionBackwardProblem {
         if key.kv_heads == 0 || !key.heads.is_multiple_of(key.kv_heads) {
             return Err(ATTENTION_BACKWARD_GROUP_UNEVEN);
         }
-        let rows = |innermost: usize| ElemAlignment::new(&[1, innermost], &[innermost, 1]);
-        let (head, value) = (rows(key.head_dim), rows(key.val_dim));
+        // Each operand dense, its rows as long as its innermost axis.
+        let row = |axis: Axis| match axis {
+            D => key.head_dim,
+            DV => key.val_dim,
+            _ => 1,
+        };
         Ok(Self {
             batch: key.batch,
             num_kv_heads: key.kv_heads,
@@ -71,30 +76,11 @@ impl TryFrom<&AttentionBackwardKey> for AttentionBackwardProblem {
             val_dim: key.val_dim,
             visibility: key.visibility,
             element: key.elem,
-            elem_alignments: AttentionBackwardOperands {
-                query: head,
-                key: head,
-                value,
-                out: value,
-                out_gradient: value,
-                logsumexp: rows(1),
-                delta: rows(1),
-                query_gradient: head,
-                key_gradient: head,
-                value_gradient: value,
-            },
-            start_bytes: AttentionBackwardOperands {
-                query: 0,
-                key: 0,
-                value: 0,
-                out: 0,
-                out_gradient: 0,
-                logsumexp: 0,
-                delta: 0,
-                query_gradient: 0,
-                key_gradient: 0,
-                value_gradient: 0,
-            },
+            elem_alignments: AttentionBackwardOperands::from_fn(|operand| {
+                let row = row(operand.innermost());
+                ElemAlignment::new(&[1, row], &[row, 1])
+            }),
+            start_bytes: AttentionBackwardOperands::from_fn(|_| 0),
         })
     }
 }

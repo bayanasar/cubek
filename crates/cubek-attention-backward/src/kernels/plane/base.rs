@@ -4,11 +4,10 @@ use crate::{
     AttentionBackwardRoutineBlueprint, AttentionBackwardTensors, AttentionBackwardWalk,
 };
 use core::num::NonZeroUsize;
-use cubecl::ir::ElemType;
 use cubecl::tile::launch::Refusal;
 use cubecl::tile::space::{CubeOrder, PlaneOrder};
-use cubecl::tile::{Axis, Partitioning, Space, StageStorage};
-use cubek_microkernel::attention::{B, D, DV, G, KV, Q, S};
+use cubecl::tile::{Partitioning, StageStorage};
+use cubek_microkernel::attention::{B, G, KV, Q, S};
 use cubek_microkernel::attention_backward::key_gradient::plane::{
     PlaneKeyGradientMicrokernel, PlaneKeyGradientMicrokernelSettings,
 };
@@ -70,22 +69,6 @@ pub struct PlaneFragmentAttentionBackwardSharedMemory {
 }
 
 impl PlaneFragmentAttentionBackwardRoutine {
-    /// One stage of the operands a walk holds `extent` of along `walked`, a row of each spanning
-    /// `D` and `DV`: the keys and values the first walk stages, or the queries and output
-    /// gradient the second does.
-    fn stage(
-        element: ElemType,
-        (walked, extent): (Axis, usize),
-        problem: &AttentionBackwardProblem,
-    ) -> [StagedOperand; 2] {
-        let operand = |row: Axis, width: usize| StagedOperand {
-            element,
-            space: Space::new(&[(walked, extent), (row, width)]),
-            innermost: row,
-        };
-        [operand(D, problem.head_dim), operand(DV, problem.val_dim)]
-    }
-
     /// The grid and the resolved ring of a walk whose stage is `stage`, `planes` planes a cube
     /// each holding `window` bytes beside its stages.
     fn grid(
@@ -184,7 +167,7 @@ impl AttentionBackwardRoutine for PlaneFragmentAttentionBackwardRoutine {
         let (query_grid, query_ring) = Self::grid(
             hw,
             &query_partitioning,
-            &Self::stage(item.element, (S, query_gradient.seq_kv()), problem),
+            &problem.stage(S, query_gradient.seq_kv()),
             settings.ring,
             planes,
             query_gradient.window_bytes(&item),
@@ -192,7 +175,7 @@ impl AttentionBackwardRoutine for PlaneFragmentAttentionBackwardRoutine {
         let (key_grid, key_ring) = Self::grid(
             hw,
             &key_partitioning,
-            &Self::stage(item.element, (Q, key_gradient.seq_q()), problem),
+            &problem.stage(Q, key_gradient.seq_q()),
             settings.ring,
             planes,
             key_gradient.window_bytes(&item),

@@ -1,6 +1,6 @@
 use super::base::PlaneKeyGradientMicrokernel;
 use crate::attention::{D, DV, Q, S};
-use crate::attention_backward::{ScoreWindows, contract_into_window};
+use crate::attention_backward::{ScoreWindows, contract_into_window, drain_scaled};
 use crate::matmul::dense::plane::plane_fragment_microkernel;
 use crate::matmul::{MatmulOperands, MatmulRead};
 use crate::staging::StageRing;
@@ -158,13 +158,12 @@ impl KeyGradientSums {
         scale: EA,
         #[comptime] microkernel: PlaneKeyGradientMicrokernel,
     ) {
-        let mut scales = Array::<EA>::new(comptime!(microkernel.seq_kv()));
-        #[unroll]
-        for s in 0..comptime!(microkernel.seq_kv()) {
-            scales[s] = scale;
-        }
-        self.key.along(D).mul(&scales);
-        self.key.drained_into(key_gradient);
+        drain_scaled::<EA>(
+            &self.key,
+            key_gradient,
+            scale,
+            comptime!(microkernel.seq_kv()),
+        );
         self.value.drained_into(value_gradient);
     }
 }

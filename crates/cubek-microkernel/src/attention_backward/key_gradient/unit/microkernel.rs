@@ -1,5 +1,6 @@
 use super::base::UnitKeyGradientMicrokernel;
-use crate::attention::{D, Q};
+use crate::attention::Q;
+use crate::attention_backward::drain_scaled;
 use crate::matmul::dense::unit::unit_registers_microkernel;
 use cubecl::tile::{Region, Semiring, Tile};
 use cubecl::{self as cubecl, cube, prelude::*};
@@ -86,12 +87,11 @@ pub fn unit_key_gradient_microkernel<EA: Float>(
             }
         }
     }
-    let mut scales = Array::<EA>::new(comptime!(microkernel.seq_kv()));
-    #[unroll]
-    for s in 0..comptime!(microkernel.seq_kv()) {
-        scales[s] = scale;
-    }
-    key_sum.along(D).mul(&scales);
-    key_sum.drained_into(key_gradient);
+    drain_scaled::<EA>(
+        &key_sum,
+        key_gradient,
+        scale,
+        comptime!(microkernel.seq_kv()),
+    );
     value_sum.drained_into(value_gradient);
 }

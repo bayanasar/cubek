@@ -1,14 +1,14 @@
 //! The tensors of one backward pass, and how a walk binds them.
 
-use crate::{AttentionBackwardProblem, AttentionBackwardWalk};
+use crate::{AttentionBackwardMicrokernel, AttentionBackwardProblem, AttentionBackwardWalk};
 use cubecl::client::Client;
 use cubecl::ir::{ElemType, FloatKind};
 use cubecl::std::tensor::TensorHandle;
+use cubecl::tile::Launcher;
 use cubecl::tile::launch::{Bound, Grid as LaunchGrid, Refusal};
-use cubecl::tile::{Axis, Launcher};
 use cubecl::zspace::metadata::Metadata;
 use cubek_matmul::kernels::tensor::{ELEMENT_NOT_ON_DEVICE, PlainTensor};
-use cubek_microkernel::attention::{AttentionVisibility, B, D, DV, G, KV, Q, S};
+use cubek_microkernel::attention::AttentionVisibility;
 use cubek_microkernel::attention_backward::AttentionBackwardOperands;
 use cubek_std::routine::ADMITTED_PLAN_RUNS;
 
@@ -198,30 +198,8 @@ impl AttentionBackwardTensors {
             val_dim: value,
             visibility: self.visibility,
             element: views.query.elem,
-            elem_alignments: AttentionBackwardOperands {
-                query: views.query.elem_alignment(),
-                key: views.key.elem_alignment(),
-                value: views.value.elem_alignment(),
-                out: views.out.elem_alignment(),
-                out_gradient: views.out_gradient.elem_alignment(),
-                logsumexp: views.logsumexp.elem_alignment(),
-                delta: views.delta.elem_alignment(),
-                query_gradient: views.query_gradient.elem_alignment(),
-                key_gradient: views.key_gradient.elem_alignment(),
-                value_gradient: views.value_gradient.elem_alignment(),
-            },
-            start_bytes: AttentionBackwardOperands {
-                query: views.query.start_bytes(),
-                key: views.key.start_bytes(),
-                value: views.value.start_bytes(),
-                out: views.out.start_bytes(),
-                out_gradient: views.out_gradient.start_bytes(),
-                logsumexp: views.logsumexp.start_bytes(),
-                delta: views.delta.start_bytes(),
-                query_gradient: views.query_gradient.start_bytes(),
-                key_gradient: views.key_gradient.start_bytes(),
-                value_gradient: views.value_gradient.start_bytes(),
-            },
+            elem_alignments: views.map(|_, view| view.elem_alignment()),
+            start_bytes: views.map(|_, view| view.start_bytes()),
         }
     }
 
@@ -244,7 +222,7 @@ impl AttentionBackwardTensors {
     /// grid. A walk passes its kernel the ones it reads and writes.
     pub fn bind<M, SM>(&self, walk: &AttentionBackwardWalk<M, SM>) -> AttentionBackwardBinding
     where
-        M: crate::AttentionBackwardMicrokernel,
+        M: AttentionBackwardMicrokernel,
     {
         let launcher = Launcher::new(
             &self.client,
@@ -256,36 +234,14 @@ impl AttentionBackwardTensors {
             },
         )
         .expect(ADMITTED_PLAN_RUNS);
-        let views = &self.views;
-        let bind = |tensor: &PlainTensor, axes: &'static [Axis], width: usize| {
+        let operands = self.views.map(|operand, view| {
             launcher
-                .arg(tensor.binding.clone(), tensor.elem)
-                .axes(axes)
-                .vectorize(width)
+                .arg(view.binding.clone(), view.elem)
+                .axes(operand.axes())
+                .vectorize(walk.widths.get(operand))
                 .build()
                 .expect(ADMITTED_PLAN_RUNS)
-        };
-        let widths = walk.widths;
-        let operands = AttentionBackwardOperands {
-            query: bind(&views.query, &[B, KV, G, Q, D], widths.query),
-            key: bind(&views.key, &[B, KV, S, D], widths.key),
-            value: bind(&views.value, &[B, KV, S, DV], widths.value),
-            out: bind(&views.out, &[B, KV, G, Q, DV], widths.out),
-            out_gradient: bind(&views.out_gradient, &[B, KV, G, Q, DV], widths.out_gradient),
-            logsumexp: bind(&views.logsumexp, &[B, KV, G, Q], widths.logsumexp),
-            delta: bind(&views.delta, &[B, KV, G, Q], widths.delta),
-            query_gradient: bind(
-                &views.query_gradient,
-                &[B, KV, G, Q, D],
-                widths.query_gradient,
-            ),
-            key_gradient: bind(&views.key_gradient, &[B, KV, S, D], widths.key_gradient),
-            value_gradient: bind(
-                &views.value_gradient,
-                &[B, KV, S, DV],
-                widths.value_gradient,
-            ),
-        };
+        });
         AttentionBackwardBinding { launcher, operands }
     }
 }

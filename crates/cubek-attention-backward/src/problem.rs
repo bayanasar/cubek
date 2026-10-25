@@ -1,10 +1,13 @@
 //! The problem a routine computes.
 
 use cubecl::ir::{ElemType, FloatKind};
-use cubecl::tile::Space;
 use cubecl::tile::layout::ElemAlignment;
+use cubecl::tile::{Axis, Space};
 use cubek_microkernel::attention::{AttentionVisibility, B, D, DV, G, KV, Q, S};
-use cubek_microkernel::attention_backward::{AttentionBackwardOperands, AttentionBackwardWorkItem};
+use cubek_microkernel::attention_backward::{
+    AttentionBackwardOperand, AttentionBackwardOperands, AttentionBackwardWorkItem,
+};
+use cubek_microkernel::staging::StagedOperand;
 
 /// The gradients of `out[b, h, q] = softmax(query[b, h, q] · key[b, h / group]ᵀ · scale) ·
 /// value[b, h / group]` against its three inputs, as the host describes it: the queries are the
@@ -57,20 +60,24 @@ impl AttentionBackwardProblem {
         ])
     }
 
+    /// One stage of the operands a walk holds `extent` of along `walked`, a row of each spanning
+    /// `D` and `DV`: the keys and values the query walk stages, or the queries and output
+    /// gradient the key walk does.
+    pub fn stage(&self, walked: Axis, extent: usize) -> [StagedOperand; 2] {
+        let operand = |row: Axis, width: usize| StagedOperand {
+            element: self.element,
+            space: Space::new(&[(walked, extent), (row, width)]),
+            innermost: row,
+        };
+        [operand(D, self.head_dim), operand(DV, self.val_dim)]
+    }
+
     /// The element `operand` is stored in: the logsumexp and the dot products at the sum's, the
     /// rest at the problem's.
     pub fn elements(&self) -> AttentionBackwardOperands<ElemType> {
-        AttentionBackwardOperands {
-            query: self.element,
-            key: self.element,
-            value: self.element,
-            out: self.element,
-            out_gradient: self.element,
-            logsumexp: Self::SUM,
-            delta: Self::SUM,
-            query_gradient: self.element,
-            key_gradient: self.element,
-            value_gradient: self.element,
-        }
+        AttentionBackwardOperands::from_fn(|operand| match operand {
+            AttentionBackwardOperand::Logsumexp | AttentionBackwardOperand::Delta => Self::SUM,
+            _ => self.element,
+        })
     }
 }

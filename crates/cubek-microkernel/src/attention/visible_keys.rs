@@ -1,6 +1,6 @@
 use crate::attention::{AttentionVisibility, G, Q, S};
 use cubecl::tile::{
-    Axis, Partitioning, Region, Tile,
+    Axis, Partitioning, Region, Space, Tile,
     procedural::{Procedural, Reads, Recipe, RecipeCoords, RecipeExpand},
 };
 use cubecl::{self as cubecl, cube, ir::Scope, prelude::*};
@@ -41,22 +41,25 @@ impl VisibleKeys {
 
     /// The bias the scores are summed with, over `partitioning`'s heads, queries and keys.
     pub fn bias<E: Numeric>(&self, partitioning: &Partitioning) -> Tile {
-        Procedural::new::<E, VisibleKeys>(
+        self.bias_over::<E>(
+            partitioning,
             comptime!(partitioning.space().subspace(&[G, Q, S])),
-            VisibleKeys {
-                attended: self.attended,
-                seq_q: self.seq_q,
-                visibility: comptime!(self.visibility),
-            },
         )
-        .tile_in::<E>(partitioning)
     }
 
     /// The bias over `partitioning`'s heads, keys and queries, the keys before the queries: as a
     /// walk owned by the keys holds its scores.
     pub fn keys_first_bias<E: Numeric>(&self, partitioning: &Partitioning) -> Tile {
-        Procedural::new::<E, VisibleKeys>(
+        self.bias_over::<E>(
+            partitioning,
             comptime!(partitioning.space().subspace(&[G, S, Q])),
+        )
+    }
+
+    /// The bias over `space`, laid out as the scores it is summed into.
+    fn bias_over<E: Numeric>(&self, partitioning: &Partitioning, #[comptime] space: Space) -> Tile {
+        Procedural::new::<E, VisibleKeys>(
+            space,
             VisibleKeys {
                 attended: self.attended,
                 seq_q: self.seq_q,

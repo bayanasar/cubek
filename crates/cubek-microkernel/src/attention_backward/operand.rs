@@ -1,4 +1,4 @@
-use crate::attention::{D, DV, Q};
+use crate::attention::{B, D, DV, G, KV, Q, S};
 use cubecl::tile::Axis;
 
 /// One of the tensors of attention's backward pass: the forward's operands and its output, the
@@ -43,13 +43,21 @@ impl AttentionBackwardOperand {
         Self::ValueGradient,
     ];
 
+    /// The axes this operand is bound along, outermost first, as each variant states them.
+    pub fn axes(self) -> &'static [Axis] {
+        match self {
+            Self::Query | Self::QueryGradient => &[B, KV, G, Q, D],
+            Self::Key | Self::KeyGradient => &[B, KV, S, D],
+            Self::Value | Self::ValueGradient => &[B, KV, S, DV],
+            Self::Out | Self::OutGradient => &[B, KV, G, Q, DV],
+            Self::Logsumexp | Self::Delta => &[B, KV, G, Q],
+        }
+    }
+
     /// The axis this operand is bound innermost along: the one its lines run along.
     pub fn innermost(self) -> Axis {
-        match self {
-            Self::Query | Self::Key | Self::QueryGradient | Self::KeyGradient => D,
-            Self::Value | Self::Out | Self::OutGradient | Self::ValueGradient => DV,
-            Self::Logsumexp | Self::Delta => Q,
-        }
+        let axes = self.axes();
+        axes[axes.len() - 1]
     }
 }
 
@@ -84,24 +92,43 @@ impl<T: Copy> AttentionBackwardOperands<T> {
             AttentionBackwardOperand::ValueGradient => self.value_gradient,
         }
     }
+}
+
+impl<T> AttentionBackwardOperands<T> {
+    /// The value `f` gives each operand.
+    pub fn from_fn(f: impl Fn(AttentionBackwardOperand) -> T) -> Self {
+        use AttentionBackwardOperand as Operand;
+        Self {
+            query: f(Operand::Query),
+            key: f(Operand::Key),
+            value: f(Operand::Value),
+            out: f(Operand::Out),
+            out_gradient: f(Operand::OutGradient),
+            logsumexp: f(Operand::Logsumexp),
+            delta: f(Operand::Delta),
+            query_gradient: f(Operand::QueryGradient),
+            key_gradient: f(Operand::KeyGradient),
+            value_gradient: f(Operand::ValueGradient),
+        }
+    }
 
     /// A value per operand, computed from each operand and its value here.
     pub fn map<U>(
         &self,
-        f: impl Fn(AttentionBackwardOperand, T) -> U,
+        f: impl Fn(AttentionBackwardOperand, &T) -> U,
     ) -> AttentionBackwardOperands<U> {
         use AttentionBackwardOperand as Operand;
         AttentionBackwardOperands {
-            query: f(Operand::Query, self.query),
-            key: f(Operand::Key, self.key),
-            value: f(Operand::Value, self.value),
-            out: f(Operand::Out, self.out),
-            out_gradient: f(Operand::OutGradient, self.out_gradient),
-            logsumexp: f(Operand::Logsumexp, self.logsumexp),
-            delta: f(Operand::Delta, self.delta),
-            query_gradient: f(Operand::QueryGradient, self.query_gradient),
-            key_gradient: f(Operand::KeyGradient, self.key_gradient),
-            value_gradient: f(Operand::ValueGradient, self.value_gradient),
+            query: f(Operand::Query, &self.query),
+            key: f(Operand::Key, &self.key),
+            value: f(Operand::Value, &self.value),
+            out: f(Operand::Out, &self.out),
+            out_gradient: f(Operand::OutGradient, &self.out_gradient),
+            logsumexp: f(Operand::Logsumexp, &self.logsumexp),
+            delta: f(Operand::Delta, &self.delta),
+            query_gradient: f(Operand::QueryGradient, &self.query_gradient),
+            key_gradient: f(Operand::KeyGradient, &self.key_gradient),
+            value_gradient: f(Operand::ValueGradient, &self.value_gradient),
         }
     }
 }

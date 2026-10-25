@@ -8,8 +8,8 @@ use cubek_microkernel::attention::{
 };
 
 /// Every cube running the cube microkernel on its box with planes that read its stage, held as
-/// `storage`, over the keys its rows see, and
-/// writing each row's logsumexp where the launch binds one.
+/// `storage`, over the keys its rows see, and writing each row's logsumexp where the launch binds
+/// one.
 #[cube(launch_unchecked)]
 #[allow(clippy::too_many_arguments)]
 pub fn cube_staged_attention_kernel<

@@ -1,6 +1,6 @@
 use super::base::PlaneQueryGradientMicrokernel;
-use crate::attention::{D, G, Q, S};
-use crate::attention_backward::{ScoreWindows, contract_into_window};
+use crate::attention::{G, Q, S};
+use crate::attention_backward::{ScoreWindows, contract_into_window, drain_scaled};
 use crate::matmul::dense::plane::plane_fragment_microkernel;
 use crate::matmul::{MatmulOperands, MatmulRead};
 use crate::staging::StageRing;
@@ -79,7 +79,7 @@ pub fn plane_fragment_query_gradient_microkernel<EA: Float, ES: Float>(
             );
         });
     });
-    store_query_gradient::<EA>(&sum, query_gradient, scale, microkernel);
+    drain_scaled::<EA>(&sum, query_gradient, scale, comptime!(microkernel.seq_q()));
 }
 
 /// The sum every stage's query gradient adds into, at `EA`, opened at zero on `query_gradient`
@@ -168,21 +168,4 @@ pub(crate) fn plane_query_gradient_step<EA: Float>(
         comptime!(None),
         comptime!(MatmulOperands::all(MatmulRead::AsBound)),
     );
-}
-
-/// `sum` scaled and drained into `query_gradient`, both windowed to one plane's queries.
-#[cube]
-pub(crate) fn store_query_gradient<EA: Float>(
-    sum: &Tile,
-    query_gradient: &Tile,
-    scale: EA,
-    #[comptime] microkernel: PlaneQueryGradientMicrokernel,
-) {
-    let mut scales = Array::<EA>::new(comptime!(microkernel.seq_q()));
-    #[unroll]
-    for q in 0..comptime!(microkernel.seq_q()) {
-        scales[q] = scale;
-    }
-    sum.along(D).mul(&scales);
-    sum.drained_into(query_gradient);
 }
