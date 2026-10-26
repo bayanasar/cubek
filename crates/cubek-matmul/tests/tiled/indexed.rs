@@ -22,6 +22,8 @@ use cubek_std::matmul_axes::{K, N};
 use cubek_std::routine::Routine;
 use cubek_test_utils::{HostData, HostDataType, TestOutcome, ValidationResult, client};
 
+const FLOAT_TOLERANCE: f32 = 1e-3;
+
 /// `values` uploaded as a dense tensor of `shape`.
 pub(super) fn upload<E: CubeElement + Scalar>(
     client: &Client,
@@ -72,7 +74,7 @@ fn check_every_setting<M, SM, R>(
             (lhs, StoredTensor::Plain(rhs), table)
         },
         expected,
-        1e-3,
+        FLOAT_TOLERANCE,
     );
 }
 
@@ -90,8 +92,7 @@ fn check_settings<M, SM, R>(
 {
     let client = client();
     let hw = Hardware::from_client(&client);
-    let mut ran = 0;
-    let mut cubes_past_device = true;
+    let mut walk = Walk::new();
     for settings in settings(&routine, &hw) {
         let (lhs, rhs, table) = inputs();
         // `[batches.., rows, n]`: the table's dims, then the activation's rows and the stack's
@@ -105,34 +106,71 @@ fn check_settings<M, SM, R>(
         let (out, bound) =
             PlainTensor::empty_contiguous(&client, Shape::from(shape.clone()), lhs.elem);
         let launched = routine.launch_indexed_into(&hw, &client, lhs, rhs, table, bound, &settings);
-        if let Err(why) = launched {
-            cubes_past_device &= matches!(why, Refusal::CubePastDevice { .. });
-            continue;
-        }
-        ran += 1;
-        let got = HostData::from_tensor_handle(&client, out, HostDataType::F32);
-        for (i, &want) in expected.iter().enumerate() {
-            let have = got.get_f32(&unravel(i, &shape));
-            assert!(
-                (have - want).abs() <= tolerance * (1. + want.abs()),
-                "{settings:?}: element {i} is {have}, want {want}"
-            );
+        if walk.ran(launched).is_some() {
+            let got = HostData::from_tensor_handle(&client, out, HostDataType::F32);
+            assert_close(&got, &shape, expected, tolerance, &settings);
         }
     }
-    settled(ran, cubes_past_device);
+    walk.settle();
 }
 
-/// The end of a walk over settings: at least one ran, unless every one asked for a cube larger
-/// than the device holds (the CPU runtime's few units), which skips the test.
-fn settled(ran: usize, cubes_past_device: bool) {
-    if ran == 0 && cubes_past_device {
-        TestOutcome::Validated(ValidationResult::Skipped(
-            "every setting asks for a cube larger than this device holds".to_string(),
-        ))
-        .enforce();
-        return;
+/// `got`, of `shape`, against `expected` row-major, each element within `tolerance` of one or the
+/// element.
+fn assert_close(
+    got: &HostData,
+    shape: &[usize],
+    expected: &[f32],
+    tolerance: f32,
+    settings: &impl core::fmt::Debug,
+) {
+    for (i, &want) in expected.iter().enumerate() {
+        let have = got.get_f32(&unravel(i, shape));
+        assert!(
+            (have - want).abs() <= tolerance * (1. + want.abs()),
+            "{settings:?}: element {i} is {have}, want {want}"
+        );
     }
-    assert!(ran > 0, "no setting prepared");
+}
+
+/// The launches of a walk over settings. At least one must run, unless every refusal was a cube
+/// larger than the device holds (the CPU runtime's few units), which skips the test.
+struct Walk {
+    ran: usize,
+    cubes_past_device: bool,
+}
+
+impl Walk {
+    fn new() -> Self {
+        Self {
+            ran: 0,
+            cubes_past_device: true,
+        }
+    }
+
+    /// The launch's output when it ran, counting it; else `None`, noting why it did not.
+    fn ran<T>(&mut self, launched: Result<T, Refusal>) -> Option<T> {
+        match launched {
+            Ok(out) => {
+                self.ran += 1;
+                Some(out)
+            }
+            Err(why) => {
+                self.cubes_past_device &= matches!(why, Refusal::CubePastDevice { .. });
+                None
+            }
+        }
+    }
+
+    fn settle(self) {
+        if self.ran == 0 && self.cubes_past_device {
+            TestOutcome::Validated(ValidationResult::Skipped(
+                "every setting asks for a cube larger than this device holds".to_string(),
+            ))
+            .enforce();
+            return;
+        }
+        assert!(self.ran > 0, "no setting prepared");
+    }
 }
 
 /// `tokens` rows, each routed to `picks` of `slabs` slabs of `[k, n]`: batches `[tokens, picks]`
