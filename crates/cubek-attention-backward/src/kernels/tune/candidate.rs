@@ -2,6 +2,7 @@
 
 use crate::kernels::AttentionBackwardProblem;
 use crate::kernels::AttentionBackwardRoutine;
+use crate::kernels::AttentionBackwardTensors;
 use crate::kernels::tune::AttentionBackwardKey;
 use cubek_std::Hardware;
 use cubek_std::autotune::{CandidatePriority, TuneCandidate, short_of_the_device};
@@ -32,9 +33,14 @@ impl<R: AttentionBackwardRoutine + Copy> AttentionBackwardCandidate<R> {
             .collect()
     }
 
-    /// The routine this candidate launches.
-    pub fn routine(&self) -> R {
+    /// `tensors`' gradients written by this candidate's routine at its setting, or why it did not
+    /// run.
+    pub fn launch(&self, tensors: AttentionBackwardTensors) -> Result<(), String> {
+        let hw = Hardware::from_client(tensors.client());
         self.routine
+            .launch_on(&hw, tensors, &self.settings)
+            .map(|_| ())
+            .map_err(|why| format!("{} does not serve this problem: {why:?}", self.settings))
     }
 }
 
