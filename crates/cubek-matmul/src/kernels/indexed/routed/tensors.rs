@@ -34,6 +34,20 @@ pub struct RoutedMatmulTensors {
     along: SlabAxis,
 }
 
+impl core::fmt::Debug for RoutedMatmulTensors {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // The client says nothing about the product.
+        f.debug_struct("RoutedMatmulTensors")
+            .field("lhs", &self.lhs)
+            .field("rhs", &self.rhs)
+            .field("routes", &self.routes)
+            .field("experts", &self.experts)
+            .field("slots", &self.slots)
+            .field("along", &self.along)
+            .finish()
+    }
+}
+
 impl RoutedMatmulTensors {
     /// The most batches a key tells apart: a prompt's rows times their slots, past which a grid
     /// is full whatever the count.
