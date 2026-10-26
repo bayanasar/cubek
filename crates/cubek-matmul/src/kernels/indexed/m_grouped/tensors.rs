@@ -7,7 +7,7 @@ use cubek_std::Hardware;
 use cubek_std::layout::contiguous;
 use cubek_std::matmul_axes::{K, M, N};
 
-use crate::kernels::indexed::m_grouped::grouped_rows::PaddedRows;
+use crate::kernels::indexed::m_grouped::PaddedRows;
 use crate::kernels::indexed::m_grouped::{
     MGroupedChunk, MGroupedMatmulKey, MGroupedRowSource, MGroupedSettings,
 };

@@ -11,7 +11,7 @@ use cubek_test_utils::client;
 
 use super::{MGroupedMatmulTensors, launch_tuned};
 use crate::kernels::MATMUL_SLABS_TAKE_NO_STORED_TILES;
-use crate::kernels::indexed::m_grouped::grouped_rows::upload;
+use crate::kernels::indexed::m_grouped::upload;
 use crate::kernels::indexed::stack::SlabAxis;
 use crate::kernels::tensor::{PlainTensor, StoredTensor};
 use crate::tiled::storage::{StorageLevels, tile};

@@ -17,9 +17,7 @@ use cubek_std::Hardware;
 use cubek_std::autotune::{Autotune, GroupPriority};
 use serde::{Deserialize, Serialize};
 
-use crate::kernels::indexed::m_grouped::grouped_rows::{
-    GroupedRows, PaddedRows, RouteSort, upload,
-};
+use crate::kernels::indexed::m_grouped::{GroupedRows, PaddedRows, RouteSort, upload};
 use crate::kernels::indexed::m_grouped::{
     MGroupedMatmulTensors, MGroupedRowSource, MGroupedRowSourceKind, MGroupedSettings,
 };
@@ -221,9 +219,7 @@ mod tests {
     use cubecl::std::tensor::TensorHandle;
 
     use super::evenly_spread;
-    use crate::kernels::indexed::m_grouped::grouped_rows::{
-        GroupedRows, PaddedRows, RouteSort, upload,
-    };
+    use crate::kernels::indexed::m_grouped::{GroupedRows, PaddedRows, RouteSort, upload};
     use crate::kernels::indexed::m_grouped::{MGroupedMatmulTensors, MGroupedRowSource};
     use crate::kernels::indexed::stack::SlabAxis;
     use crate::kernels::tensor::{PlainTensor, StoredTensor};
