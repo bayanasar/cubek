@@ -34,7 +34,7 @@ pub fn attention_backward(
     static TUNER: LocalTuner<AttentionBackwardKey, CubeTuneId> = local_tuner!("attention-backward");
     let tunables = TUNER.init(&id, move || {
         let mut autotune = AttentionBackwardAutotune::new(|tensors: &AttentionBackwardTensors| {
-            AttentionBackwardKey::of(&tensors.problem())
+            AttentionBackwardKey::from(&tensors.problem())
         });
         let routines = autotune.group("microkernel", GroupPriority::DEFAULT);
         autotune = match hw.plane_dim() {

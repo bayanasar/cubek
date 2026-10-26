@@ -1,6 +1,7 @@
 //! The problem a routine computes.
 
 use cubecl::ir::{ElemType, FloatKind};
+use cubecl::tile::launch::Refusal;
 use cubecl::tile::layout::ElemAlignment;
 use cubecl::tile::{Axis, Space};
 use cubek_microkernel::attention::{AttentionVisibility, B, D, DV, G, KV, Q, S};
@@ -8,6 +9,12 @@ use cubek_microkernel::attention_backward::{
     AttentionBackwardOperand, AttentionBackwardOperands, AttentionBackwardWorkItem,
 };
 use cubek_microkernel::staging::StagedOperand;
+
+/// What a backward pass declines before preparing anything: query heads that do not split
+/// evenly over the key heads.
+pub const ATTENTION_BACKWARD_GROUP_UNEVEN: Refusal = Refusal::Declined {
+    why: "attention's backward pass reads a whole group of query heads per key head",
+};
 
 /// The gradients of `out[b, h, q] = softmax(query[b, h, q] · key[b, h / group]ᵀ · scale) ·
 /// value[b, h / group]` against its three inputs, as the host describes it: the queries are the
@@ -35,6 +42,18 @@ pub struct AttentionBackwardProblem {
 impl AttentionBackwardProblem {
     /// The element everything is summed in, and the logsumexp and the dot products stored in.
     pub const SUM: ElemType = ElemType::Float(FloatKind::F32);
+
+    /// The query heads each key head serves: `heads` split evenly over `kv_heads`.
+    ///
+    /// # Errors
+    ///
+    /// [`ATTENTION_BACKWARD_GROUP_UNEVEN`], where they do not split evenly.
+    pub fn group_of(heads: usize, kv_heads: usize) -> Result<usize, Refusal> {
+        if kv_heads == 0 || !heads.is_multiple_of(kv_heads) {
+            return Err(ATTENTION_BACKWARD_GROUP_UNEVEN);
+        }
+        Ok(heads / kv_heads)
+    }
 
     /// What every microkernel of this problem is handed.
     pub fn work_item(&self) -> AttentionBackwardWorkItem {

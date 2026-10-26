@@ -21,12 +21,6 @@ pub const ATTENTION_BACKWARD_ELEMENT_UNVERIFIED: Refusal = Refusal::Declined {
           logsumexp",
 };
 
-/// What a backward pass declines before preparing anything: query heads that do not split
-/// evenly over the key heads.
-pub const ATTENTION_BACKWARD_GROUP_UNEVEN: Refusal = Refusal::Declined {
-    why: "attention's backward pass reads a whole group of query heads per key head",
-};
-
 /// The tensors of one backward pass on one client: the forward's inputs, its output and
 /// logsumexp, the loss's gradient against the output, and the three gradients it computes, with
 /// the dot product of the output and its gradient the first walk leaves for the second.
@@ -89,6 +83,8 @@ impl AttentionBackwardTensors {
     /// routines decline whatever the device, and [`ELEMENT_NOT_ON_DEVICE`]: an element this
     /// device's runtime does not run.
     ///
+    /// [`ATTENTION_BACKWARD_GROUP_UNEVEN`]: crate::kernels::ATTENTION_BACKWARD_GROUP_UNEVEN
+    ///
     /// # Panics
     ///
     /// Operands whose ranks or dims do not agree: no attention at all.
@@ -135,10 +131,7 @@ impl AttentionBackwardTensors {
                 && logsumexp.shape().dims::<3>() == [batch, heads, queries],
             "the output and its gradient are [b, h, q, dv], the logsumexp [b, h, q]"
         );
-        if kv_heads == 0 || !heads.is_multiple_of(kv_heads) {
-            return Err(ATTENTION_BACKWARD_GROUP_UNEVEN);
-        }
-        let group = heads / kv_heads;
+        let group = AttentionBackwardProblem::group_of(heads, kv_heads)?;
         let gradient =
             |shape: [usize; 4]| PlainTensor::empty_contiguous(client, shape.into(), element);
         let (query_gradient, query_gradient_view) = gradient([batch, heads, queries, head]);

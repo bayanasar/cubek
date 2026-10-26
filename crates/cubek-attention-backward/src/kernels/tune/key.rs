@@ -1,7 +1,7 @@
 //! How a backward pass is told apart from another, for autotune and for the candidates it
 //! measures.
 
-use crate::kernels::{ATTENTION_BACKWARD_GROUP_UNEVEN, AttentionBackwardProblem};
+use crate::kernels::AttentionBackwardProblem;
 use cubecl::ir::ElemType;
 use cubecl::tile::Axis;
 use cubecl::tile::launch::Refusal;
@@ -30,9 +30,9 @@ pub struct AttentionBackwardKey {
     visibility: AttentionVisibility,
 }
 
-impl AttentionBackwardKey {
-    /// The key `problem` is tuned under.
-    pub fn of(problem: &AttentionBackwardProblem) -> Self {
+/// The key `problem` is tuned under.
+impl From<&AttentionBackwardProblem> for AttentionBackwardKey {
+    fn from(problem: &AttentionBackwardProblem) -> Self {
         Self::new(
             problem.element,
             problem.num_kv_heads * problem.group,
@@ -56,10 +56,10 @@ impl TryFrom<&AttentionBackwardKey> for AttentionBackwardProblem {
     ///
     /// [`ATTENTION_BACKWARD_GROUP_UNEVEN`], where the key's query heads do not split evenly over
     /// its key heads.
+    ///
+    /// [`ATTENTION_BACKWARD_GROUP_UNEVEN`]: crate::kernels::ATTENTION_BACKWARD_GROUP_UNEVEN
     fn try_from(key: &AttentionBackwardKey) -> Result<Self, Refusal> {
-        if key.kv_heads == 0 || !key.heads.is_multiple_of(key.kv_heads) {
-            return Err(ATTENTION_BACKWARD_GROUP_UNEVEN);
-        }
+        let group = Self::group_of(key.heads, key.kv_heads)?;
         // Each operand dense, its rows as long as its innermost axis.
         let row = |axis: Axis| match axis {
             D => key.head_dim,
@@ -69,7 +69,7 @@ impl TryFrom<&AttentionBackwardKey> for AttentionBackwardProblem {
         Ok(Self {
             batch: key.batch,
             num_kv_heads: key.kv_heads,
-            group: key.heads / key.kv_heads,
+            group,
             seq_q: key.queries,
             seq_kv: key.keys,
             head_dim: key.head_dim,
