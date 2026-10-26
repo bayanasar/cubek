@@ -16,10 +16,8 @@ pub mod stack;
 pub mod tensor;
 pub mod tune;
 
-mod binding;
 mod dense;
 
-pub use binding::*;
 pub use dense::*;
 pub use select::{MatmulKernel, MatmulKernelHeuristic, MatmulOpStrategy};
 pub use tune::MatmulRoutineCandidate;
