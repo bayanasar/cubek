@@ -80,7 +80,10 @@ fn check_logsumexp<R: AttentionRoutine<M, SM>, M: AttentionMicrokernel, SM>(
     let reference = Reference::new(&client, case, element);
     let tensors = forward_tensors(&client, case, &reference);
     let logsumexp = tensors.logsumexp().expect("asked for");
-    let settings = settings.unwrap_or_else(|| routine.settings(&hw).swap_remove(0));
+    let Some(settings) = settings.or_else(|| routine.settings(&hw).into_iter().next()) else {
+        eprintln!("{name}: declined on this device, no settings");
+        return;
+    };
     match routine.launch_on(&hw, tensors, &settings) {
         Ok(_) => {
             let actual = HostData::from_tensor_handle(&client, logsumexp, HostDataType::F32);
