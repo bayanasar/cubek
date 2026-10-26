@@ -1,5 +1,5 @@
 use super::kernel::{unit_key_gradient_kernel, unit_query_gradient_kernel};
-use crate::{
+use crate::kernels::{
     AttentionBackwardBlueprint, AttentionBackwardProblem, AttentionBackwardRoutine,
     AttentionBackwardRoutineBlueprint, AttentionBackwardTensors, AttentionBackwardWalk,
 };

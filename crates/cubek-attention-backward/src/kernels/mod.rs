@@ -1,10 +1,20 @@
-//! The routines of attention's backward pass, one folder per scope: each walks the tiles of
-//! queries by keys once owned by the queries, then once owned by the keys.
+//! The routines of attention's backward pass, in `routines`, and what they share: the problem,
+//! the tensors, the walks a routine launches, and the autotune that picks one.
 
-mod cube;
-mod plane;
-mod unit;
+pub mod tune;
 
-pub use cube::*;
-pub use plane::*;
-pub use unit::*;
+mod blueprint;
+mod launch;
+mod problem;
+mod routine;
+mod routines;
+mod tensors;
+mod walk;
+
+pub use blueprint::*;
+pub use launch::*;
+pub use problem::*;
+pub use routine::*;
+pub use routines::*;
+pub use tensors::*;
+pub use walk::*;

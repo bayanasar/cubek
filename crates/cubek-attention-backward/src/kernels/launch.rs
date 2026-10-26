@@ -1,7 +1,7 @@
 //! The entry point a caller runs a backward pass through.
 
-use crate::tune::launch_tuned;
-use crate::{AttentionBackwardGradients, AttentionBackwardTensors};
+use crate::kernels::tune::launch_tuned;
+use crate::kernels::{AttentionBackwardGradients, AttentionBackwardTensors};
 use cubecl::Device;
 
 /// The gradients of the attention `tensors` state, on `device`: the fastest routine autotune

@@ -1,76 +1,62 @@
-use super::kernel::{plane_fragment_key_gradient_kernel, plane_fragment_query_gradient_kernel};
-use crate::{
+use super::kernel::{cube_staged_key_gradient_kernel, cube_staged_query_gradient_kernel};
+use crate::kernels::{
     AttentionBackwardBlueprint, AttentionBackwardProblem, AttentionBackwardRoutine,
     AttentionBackwardRoutineBlueprint, AttentionBackwardTensors, AttentionBackwardWalk,
 };
-use core::num::NonZeroUsize;
 use cubecl::tile::launch::Refusal;
-use cubecl::tile::space::{CubeOrder, PlaneOrder};
 use cubecl::tile::{Partitioning, StageStorage};
 use cubek_microkernel::attention::{B, G, KV, Q, S};
-use cubek_microkernel::attention_backward::key_gradient::plane::{
-    PlaneKeyGradientMicrokernel, PlaneKeyGradientMicrokernelSettings,
+use cubek_microkernel::attention_backward::key_gradient::cube::{
+    CubeKeyGradientMicrokernel, CubeKeyGradientMicrokernelSettings,
 };
-use cubek_microkernel::attention_backward::query_gradient::plane::{
-    PlaneQueryGradientMicrokernel, PlaneQueryGradientMicrokernelSettings,
+use cubek_microkernel::attention_backward::query_gradient::cube::{
+    CubeQueryGradientMicrokernel, CubeQueryGradientMicrokernelSettings,
 };
 use cubek_microkernel::staging::{StageRing, StagedOperand};
 use cubek_std::Hardware;
 use cubek_std::microkernel::Microkernel;
 use cubek_std::routine::{CubeResources, Grid};
 
-/// The backward pass with every plane owning, in the first walk, a box of queries of one head, and
-/// in the second, a box of keys of one key head, each on a matrix instruction. A plane stages what
-/// its walk holds still once, and what it walks a stage at a time, in shared memory of its own
-/// filled by its own units and met on `sync_plane`; no plane waits on another.
+/// The backward pass with every cube owning, in the first walk, a box of queries of some heads of
+/// the group, and in the second, a box of keys of one key head, its planes each on a matrix
+/// instruction. A cube stages what its walk holds still once, and each stage of what it walks
+/// once, for all its planes, met on `sync_cube`; each plane holds its own windows.
 ///
-/// Each launch groups its planes in cubes along the queries, or the keys, of one head. What a
-/// plane does not share it reads again: every plane of a cube stages the same keys and values in
-/// the first walk, and the same queries in the second.
+/// What the plane routine's planes each read again, the cube reads once: the keys and values every
+/// head and every plane along the queries read in the first walk, and the queries every plane
+/// along the keys reads in the second.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct PlaneFragmentAttentionBackwardRoutine;
+pub struct CubeStagedAttentionBackwardRoutine;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PlaneFragmentAttentionBackwardRoutineSettings {
-    pub query_gradient: PlaneQueryGradientMicrokernelSettings,
-    pub key_gradient: PlaneKeyGradientMicrokernelSettings,
-    /// Planes each launch groups in one cube.
-    pub planes: NonZeroUsize,
-    /// How a plane holds its stages.
+pub struct CubeStagedAttentionBackwardRoutineSettings {
+    pub query_gradient: CubeQueryGradientMicrokernelSettings,
+    pub key_gradient: CubeKeyGradientMicrokernelSettings,
+    /// How a cube holds its stages.
     pub ring: StageRing,
 }
 
-impl PlaneFragmentAttentionBackwardRoutineSettings {
+impl CubeStagedAttentionBackwardRoutineSettings {
     pub const DEFAULT: Self = Self {
-        query_gradient: PlaneQueryGradientMicrokernelSettings::DEFAULT,
-        key_gradient: PlaneKeyGradientMicrokernelSettings::DEFAULT,
-        planes: NonZeroUsize::new(1).unwrap(),
+        query_gradient: CubeQueryGradientMicrokernelSettings::DEFAULT,
+        key_gradient: CubeKeyGradientMicrokernelSettings::DEFAULT,
         ring: StageRing::SINGLE,
     };
 }
 
-impl core::fmt::Display for PlaneFragmentAttentionBackwardRoutineSettings {
+impl core::fmt::Display for CubeStagedAttentionBackwardRoutineSettings {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "plane-fragment-attention-backward query-gradient[{}] key-gradient[{}] planes={}{}",
-            self.query_gradient, self.key_gradient, self.planes, self.ring
+            "cube-staged-attention-backward query-gradient[{}] key-gradient[{}]{}",
+            self.query_gradient, self.key_gradient, self.ring
         )
     }
 }
 
-/// How a walk of the plane routine lays out the shared memory it holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PlaneFragmentAttentionBackwardSharedMemory {
-    /// The settings' ring as this device holds a plane's stages ([`StageRing::resolve`]).
-    pub ring: StageRing,
-    /// The planes of a cube, each holding its own windows.
-    pub planes: usize,
-}
-
-impl PlaneFragmentAttentionBackwardRoutine {
-    /// The grid and the resolved ring of a walk whose stage is `stage`, `planes` planes a cube
-    /// each holding `window` bytes beside its stages.
+impl CubeStagedAttentionBackwardRoutine {
+    /// The grid and the resolved ring of a walk whose stage is `stage`, filled by `planes` planes
+    /// of a cube that holds `window` bytes beside its stages.
     fn grid(
         hw: &Hardware,
         partitioning: &Partitioning,
@@ -80,37 +66,38 @@ impl PlaneFragmentAttentionBackwardRoutine {
         window: usize,
     ) -> Result<(Grid, StageRing), Refusal> {
         let plane_width = hw.plane_dim()?;
-        let ring = ring.resolve(hw, stage, plane_width as usize);
+        let ring = ring.resolve(hw, stage, planes * plane_width as usize);
         let stage_bytes = stage
             .iter()
             .map(|operand| operand.bytes(hw, &StageStorage::Strided))
             .sum();
         let cube = CubeResources {
             plane_width,
-            shared_memory: planes * (ring.bytes(stage_bytes) + window),
+            shared_memory: ring.bytes(stage_bytes) + window,
         };
         Ok((Grid::new(hw, partitioning, cube)?, ring))
     }
 }
 
-impl AttentionBackwardRoutine for PlaneFragmentAttentionBackwardRoutine {
-    type Settings = PlaneFragmentAttentionBackwardRoutineSettings;
-    type QueryGradient = PlaneQueryGradientMicrokernel;
-    type KeyGradient = PlaneKeyGradientMicrokernel;
-    type SharedMemory = PlaneFragmentAttentionBackwardSharedMemory;
+impl AttentionBackwardRoutine for CubeStagedAttentionBackwardRoutine {
+    type Settings = CubeStagedAttentionBackwardRoutineSettings;
+    type QueryGradient = CubeQueryGradientMicrokernel;
+    type KeyGradient = CubeKeyGradientMicrokernel;
+    /// The settings' ring as this device holds a cube's stages.
+    type SharedMemory = StageRing;
 
-    /// Each walk's microkernel's settings, the other's and the routine's at their default, then
-    /// two planes a cube, and each ring of stages through registers.
+    /// Each walk's microkernel's settings, the other's and the ring at their default, then each
+    /// ring of stages through registers.
     fn settings(&self, hw: &Hardware) -> Vec<Self::Settings> {
-        let lead = PlaneFragmentAttentionBackwardRoutineSettings::DEFAULT;
-        let queries = PlaneQueryGradientMicrokernel::settings(hw)
+        let lead = CubeStagedAttentionBackwardRoutineSettings::DEFAULT;
+        let queries = CubeQueryGradientMicrokernel::settings(hw)
             .into_iter()
             .skip(1)
             .map(|query_gradient| Self::Settings {
                 query_gradient,
                 ..lead
             });
-        let keys = PlaneKeyGradientMicrokernel::settings(hw)
+        let keys = CubeKeyGradientMicrokernel::settings(hw)
             .into_iter()
             .skip(1)
             .map(|key_gradient| Self::Settings {
@@ -122,17 +109,13 @@ impl AttentionBackwardRoutine for PlaneFragmentAttentionBackwardRoutine {
         core::iter::once(lead)
             .chain(queries)
             .chain(keys)
-            .chain([Self::Settings {
-                planes: NonZeroUsize::new(2).unwrap(),
-                ..lead
-            }])
             .chain(rings)
             .collect()
     }
 
-    /// A plane is as many units as the device issues its matrix instruction on, and it walks its
-    /// own stages below the planes' level, so each holds its own copy. The first walk's planes take
-    /// the queries of every head, the second's the keys of every key head.
+    /// A plane is as many units as the device issues its matrix instruction on; a cube walks its
+    /// stages above its planes, so they share them. The first walk's cubes take the queries of
+    /// some heads of every group, the second's the keys of every key head.
     fn prepare(
         &self,
         hw: &Hardware,
@@ -141,35 +124,26 @@ impl AttentionBackwardRoutine for PlaneFragmentAttentionBackwardRoutine {
     ) -> Result<AttentionBackwardRoutineBlueprint<Self>, Refusal> {
         let item = problem.work_item();
         let query_gradient =
-            PlaneQueryGradientMicrokernel::best(hw, &item, &settings.query_gradient)?;
-        let key_gradient = PlaneKeyGradientMicrokernel::best(hw, &item, &settings.key_gradient)?;
-        let planes = settings.planes.get();
+            CubeQueryGradientMicrokernel::best(hw, &item, &settings.query_gradient)?;
+        let key_gradient = CubeKeyGradientMicrokernel::best(hw, &item, &settings.key_gradient)?;
         let query_partitioning = Partitioning::new(
             problem.space(),
             query_gradient
                 .tiling()
-                .launch_planes(
-                    &[Q, G, B, KV],
-                    PlaneOrder::new(&[(Q, planes)], CubeOrder::RowMajor),
-                )
+                .cubes(&[Q, G])
+                .batches(&[B, KV])
                 .build(),
         );
         let key_partitioning = Partitioning::new(
             problem.space(),
-            key_gradient
-                .tiling()
-                .launch_planes(
-                    &[S, B, KV],
-                    PlaneOrder::new(&[(S, planes)], CubeOrder::RowMajor),
-                )
-                .build(),
+            key_gradient.tiling().cubes(&[S]).batches(&[B, KV]).build(),
         );
         let (query_grid, query_ring) = Self::grid(
             hw,
             &query_partitioning,
             &problem.stage(S, query_gradient.seq_kv()),
             settings.ring,
-            planes,
+            query_gradient.plane_count(),
             query_gradient.window_bytes(&item),
         )?;
         let (key_grid, key_ring) = Self::grid(
@@ -177,7 +151,7 @@ impl AttentionBackwardRoutine for PlaneFragmentAttentionBackwardRoutine {
             &key_partitioning,
             &problem.stage(Q, key_gradient.seq_q()),
             settings.ring,
-            planes,
+            key_gradient.plane_count(),
             key_gradient.window_bytes(&item),
         )?;
         Ok(AttentionBackwardBlueprint {
@@ -187,10 +161,7 @@ impl AttentionBackwardRoutine for PlaneFragmentAttentionBackwardRoutine {
                 query_gradient,
                 query_partitioning,
                 query_grid,
-                PlaneFragmentAttentionBackwardSharedMemory {
-                    ring: query_ring,
-                    planes,
-                },
+                query_ring,
             ),
             key_gradient: AttentionBackwardWalk::new(
                 hw,
@@ -198,10 +169,7 @@ impl AttentionBackwardRoutine for PlaneFragmentAttentionBackwardRoutine {
                 key_gradient,
                 key_partitioning,
                 key_grid,
-                PlaneFragmentAttentionBackwardSharedMemory {
-                    ring: key_ring,
-                    planes,
-                },
+                key_ring,
             ),
         })
     }
@@ -219,10 +187,10 @@ impl AttentionBackwardRoutine for PlaneFragmentAttentionBackwardRoutine {
         let operands = binding.operands;
         // SAFETY: every operand is bound through the launcher, which masks the reads and writes
         // of a tile the problem's edge cuts short, and the kernel indexes no buffer but through
-        // its tiles. Each plane writes only its own queries' gradient and dot products, and its
-        // shared memory is its own.
+        // its tiles. Each plane writes only its own queries' gradient and dot products, and each
+        // cube's shared memory is its own.
         unsafe {
-            plane_fragment_query_gradient_kernel::launch_unchecked(
+            cube_staged_query_gradient_kernel::launch_unchecked(
                 tensors.client(),
                 walk.grid.launch.cube_count,
                 walk.grid.launch.cube_dim,
@@ -239,8 +207,7 @@ impl AttentionBackwardRoutine for PlaneFragmentAttentionBackwardRoutine {
                 tensors.scale(),
                 binding.launcher.partitioning_arg(),
                 walk.microkernel,
-                walk.shared_memory.ring,
-                walk.shared_memory.planes,
+                walk.shared_memory,
                 problem.visibility,
                 elements,
             );
@@ -251,7 +218,7 @@ impl AttentionBackwardRoutine for PlaneFragmentAttentionBackwardRoutine {
         // SAFETY: as the first walk's; each plane writes only its own keys' and values' gradients,
         // and reads the dot products the first walk wrote, which the launches' order sees done.
         unsafe {
-            plane_fragment_key_gradient_kernel::launch_unchecked(
+            cube_staged_key_gradient_kernel::launch_unchecked(
                 tensors.client(),
                 walk.grid.launch.cube_count,
                 walk.grid.launch.cube_dim,
@@ -268,8 +235,7 @@ impl AttentionBackwardRoutine for PlaneFragmentAttentionBackwardRoutine {
                 tensors.scale(),
                 binding.launcher.partitioning_arg(),
                 walk.microkernel,
-                walk.shared_memory.ring,
-                walk.shared_memory.planes,
+                walk.shared_memory,
                 problem.visibility,
                 elements,
             );

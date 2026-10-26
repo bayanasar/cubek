@@ -1,7 +1,7 @@
 //! How a backward pass is told apart from another, for autotune and for the candidates it
 //! measures.
 
-use crate::{ATTENTION_BACKWARD_GROUP_UNEVEN, AttentionBackwardProblem};
+use crate::kernels::{ATTENTION_BACKWARD_GROUP_UNEVEN, AttentionBackwardProblem};
 use cubecl::ir::ElemType;
 use cubecl::tile::Axis;
 use cubecl::tile::launch::Refusal;

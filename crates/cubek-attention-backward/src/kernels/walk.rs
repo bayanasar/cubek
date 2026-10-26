@@ -1,6 +1,6 @@
 //! One launch of a routine: the microkernel it runs and how it binds.
 
-use crate::AttentionBackwardProblem;
+use crate::kernels::AttentionBackwardProblem;
 use cubecl::tile::Partitioning;
 use cubecl::tile::launch::{VectorRequirement, Vectorization};
 use cubecl::tile::layout::ElemAlignment;

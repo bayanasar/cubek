@@ -1,6 +1,6 @@
 //! What a routine of this kind states: the two walks it launches, and the launch around them.
 
-use crate::{
+use crate::kernels::{
     AttentionBackwardGradients, AttentionBackwardMicrokernel, AttentionBackwardProblem,
     AttentionBackwardRoutineBlueprint, AttentionBackwardTensors,
 };

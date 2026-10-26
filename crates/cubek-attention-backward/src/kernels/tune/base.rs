@@ -1,11 +1,13 @@
 //! Choosing a backward pass's routine by measurement.
 
+use crate::kernels::tune::{AttentionBackwardCandidate, AttentionBackwardKey};
+use crate::kernels::{
+    AttentionBackwardGradients, AttentionBackwardRoutine, AttentionBackwardTensors,
+};
 use crate::kernels::{
     CubeStagedAttentionBackwardRoutine, PlaneFragmentAttentionBackwardRoutine,
     UnitAttentionBackwardRoutine,
 };
-use crate::tune::{AttentionBackwardCandidate, AttentionBackwardKey};
-use crate::{AttentionBackwardGradients, AttentionBackwardRoutine, AttentionBackwardTensors};
 use cubecl::tune::{LocalTuner, Tunable, TunableSet, local_tuner};
 use cubecl::{CubeTuneId, Device};
 use cubek_std::Hardware;

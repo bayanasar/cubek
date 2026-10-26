@@ -1,6 +1,8 @@
 //! The tensors of one backward pass, and how a walk binds them.
 
-use crate::{AttentionBackwardMicrokernel, AttentionBackwardProblem, AttentionBackwardWalk};
+use crate::kernels::{
+    AttentionBackwardMicrokernel, AttentionBackwardProblem, AttentionBackwardWalk,
+};
 use cubecl::client::Client;
 use cubecl::ir::{ElemType, FloatKind};
 use cubecl::std::tensor::TensorHandle;

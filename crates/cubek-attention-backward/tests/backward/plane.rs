@@ -4,9 +4,9 @@
 use super::reference::{Case, Reference};
 use cubecl::client::Client;
 use cubecl::prelude::*;
-use cubek_attention_backward::AttentionBackwardRoutine;
 use cubek_attention_backward::kernels::{
-    PlaneFragmentAttentionBackwardRoutine, PlaneFragmentAttentionBackwardRoutineSettings,
+    AttentionBackwardRoutine, PlaneFragmentAttentionBackwardRoutine,
+    PlaneFragmentAttentionBackwardRoutineSettings,
 };
 use cubek_microkernel::attention::AttentionVisibility;
 use cubek_std::Hardware;

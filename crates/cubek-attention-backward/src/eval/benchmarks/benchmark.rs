@@ -1,11 +1,11 @@
 use super::{AttentionBackwardSpec, AttentionBackwardStrategy};
 use crate::kernels::{
-    CubeStagedAttentionBackwardRoutine, PlaneFragmentAttentionBackwardRoutine,
-    UnitAttentionBackwardRoutine,
-};
-use crate::{
     AttentionBackwardProblem, AttentionBackwardRoutine, AttentionBackwardTensors,
     attention_backward,
+};
+use crate::kernels::{
+    CubeStagedAttentionBackwardRoutine, PlaneFragmentAttentionBackwardRoutine,
+    UnitAttentionBackwardRoutine,
 };
 use cubecl::benchmark::{Benchmark, ProfileDuration, TimingMethod};
 use cubecl::client::Client;

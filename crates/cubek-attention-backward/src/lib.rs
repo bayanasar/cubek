@@ -16,24 +16,14 @@
 //! then owned by the keys, for theirs and their values'. Nothing is summed across owners, so a
 //! run's gradients are the same bits every time.
 //!
-//! The routines, one folder per scope, are in `kernels`; [`attention_backward`] runs the one
+//! The routines, one folder per scope, are in [`kernels`]; [`attention_backward`] runs the one
 //! autotune measures fastest.
 
 #[cfg(feature = "benchmarks")]
 pub mod eval;
 pub mod kernels;
-pub mod tune;
 
-mod blueprint;
-mod launch;
-mod problem;
-mod routine;
-mod tensors;
-mod walk;
-
-pub use blueprint::*;
-pub use launch::*;
-pub use problem::*;
-pub use routine::*;
-pub use tensors::*;
-pub use walk::*;
+pub use kernels::{
+    ATTENTION_BACKWARD_ELEMENT_UNVERIFIED, ATTENTION_BACKWARD_GROUP_UNEVEN,
+    AttentionBackwardGradients, AttentionBackwardTensors, attention_backward,
+};

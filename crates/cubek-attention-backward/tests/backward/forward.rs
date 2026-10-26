@@ -14,8 +14,8 @@ use cubek_attention::kernels::{
     HypercubeSecondLaunchFragmentAttentionRoutine, HypercubeSecondLaunchShuffleAttentionRoutine,
     PlaneFragmentAttentionRoutine, ScoreScale, UnitAttentionRoutine,
 };
-use cubek_attention_backward::kernels::UnitAttentionBackwardRoutine;
-use cubek_attention_backward::{AttentionBackwardRoutine, AttentionBackwardTensors};
+use cubek_attention_backward::AttentionBackwardTensors;
+use cubek_attention_backward::kernels::{AttentionBackwardRoutine, UnitAttentionBackwardRoutine};
 use cubek_matmul::kernels::tensor::PlainTensor;
 use cubek_microkernel::attention::plane::{
     PlaneFragmentAttentionMicrokernel, PlaneUnitGroupAttentionMicrokernel,

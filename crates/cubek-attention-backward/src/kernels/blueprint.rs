@@ -1,6 +1,6 @@
 //! What a routine compiles: its two walks.
 
-use crate::{AttentionBackwardRoutine, AttentionBackwardWalk};
+use crate::kernels::{AttentionBackwardRoutine, AttentionBackwardWalk};
 
 /// What a routine of this kind compiles: the walk owned by the queries, which writes their
 /// gradient and each one's dot product, then the walk owned by the keys, which reads the dot

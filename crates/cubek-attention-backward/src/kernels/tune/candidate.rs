@@ -1,8 +1,8 @@
 //! The candidates the backward pass's autotune races.
 
-use crate::AttentionBackwardProblem;
-use crate::AttentionBackwardRoutine;
-use crate::tune::AttentionBackwardKey;
+use crate::kernels::AttentionBackwardProblem;
+use crate::kernels::AttentionBackwardRoutine;
+use crate::kernels::tune::AttentionBackwardKey;
 use cubek_std::Hardware;
 use cubek_std::autotune::{CandidatePriority, TuneCandidate, short_of_the_device};
 
