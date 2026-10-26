@@ -27,8 +27,7 @@ pub const ATTENTION_BACKWARD_ELEMENT_UNVERIFIED: Refusal = Refusal::Declined {
 ///
 /// Every operand is read where it lies, by its strides: the query's heads, and the output's, its
 /// gradient's and the logsumexp's, are viewed as a group per key head, `[b, kv, g, q, ·]`.
-/// Nothing is copied. The problem the tensors state is read off them
-/// ([`problem`](Self::problem)).
+/// Nothing is copied. The problem the tensors state is read off them.
 #[derive(Clone)]
 pub struct AttentionBackwardTensors {
     client: Client,
@@ -65,7 +64,7 @@ pub struct AttentionBackwardGradients {
 
 impl AttentionBackwardTensors {
     /// The elements the routines are verified at.
-    pub const VERIFIED: [ElemType; 3] = [
+    pub(crate) const VERIFIED: [ElemType; 3] = [
         ElemType::Float(FloatKind::F32),
         ElemType::Float(FloatKind::F16),
         ElemType::Float(FloatKind::BF16),
@@ -179,7 +178,7 @@ impl AttentionBackwardTensors {
     }
 
     /// The problem the tensors state.
-    pub fn problem(&self) -> AttentionBackwardProblem {
+    pub(crate) fn problem(&self) -> AttentionBackwardProblem {
         let views = &self.views;
         let [batch, kv_heads, group, queries, head] = views.query.shape().dims::<5>();
         let [_, _, keys, value] = views.value.shape().dims::<4>();
@@ -199,23 +198,26 @@ impl AttentionBackwardTensors {
     }
 
     /// The client the operands live on, which a launch submits to.
-    pub fn client(&self) -> &Client {
+    pub(crate) fn client(&self) -> &Client {
         &self.client
     }
 
     /// The scale each dot product takes before the softmax.
-    pub fn scale(&self) -> f32 {
+    pub(crate) fn scale(&self) -> f32 {
         self.scale
     }
 
     /// The gradients, once both walks are launched.
-    pub fn into_gradients(self) -> AttentionBackwardGradients {
+    pub(crate) fn into_gradients(self) -> AttentionBackwardGradients {
         self.gradients
     }
 
     /// Every operand bound as `walk` states it: under its partitioning, at its widths, on its
     /// grid. A walk passes its kernel the ones it reads and writes.
-    pub fn bind<M, SM>(&self, walk: &AttentionBackwardWalk<M, SM>) -> AttentionBackwardBinding
+    pub(crate) fn bind<M, SM>(
+        &self,
+        walk: &AttentionBackwardWalk<M, SM>,
+    ) -> AttentionBackwardBinding
     where
         M: AttentionBackwardMicrokernel,
     {
@@ -243,7 +245,7 @@ impl AttentionBackwardTensors {
 
 /// The arguments of one walk's launch, its operands bound under its launcher. Not `Debug`: the
 /// tile DSL's `Launcher` is not.
-pub struct AttentionBackwardBinding {
+pub(crate) struct AttentionBackwardBinding {
     pub launcher: Launcher,
     pub operands: AttentionBackwardOperands<Bound>,
 }

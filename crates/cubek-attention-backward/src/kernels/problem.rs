@@ -41,14 +41,14 @@ pub struct AttentionBackwardProblem {
 
 impl AttentionBackwardProblem {
     /// The element everything is summed in, and the logsumexp and the dot products stored in.
-    pub const SUM: ElemType = ElemType::Float(FloatKind::F32);
+    pub(crate) const SUM: ElemType = ElemType::Float(FloatKind::F32);
 
     /// The query heads each key head serves: `heads` split evenly over `kv_heads`.
     ///
     /// # Errors
     ///
     /// [`ATTENTION_BACKWARD_GROUP_UNEVEN`], where they do not split evenly.
-    pub fn group_of(heads: usize, kv_heads: usize) -> Result<usize, Refusal> {
+    pub(crate) fn group_of(heads: usize, kv_heads: usize) -> Result<usize, Refusal> {
         if kv_heads == 0 || !heads.is_multiple_of(kv_heads) {
             return Err(ATTENTION_BACKWARD_GROUP_UNEVEN);
         }
@@ -56,7 +56,7 @@ impl AttentionBackwardProblem {
     }
 
     /// What every microkernel of this problem is handed.
-    pub fn work_item(&self) -> AttentionBackwardWorkItem {
+    pub(crate) fn work_item(&self) -> AttentionBackwardWorkItem {
         AttentionBackwardWorkItem {
             element: self.element,
             sum: Self::SUM,
@@ -67,7 +67,7 @@ impl AttentionBackwardProblem {
     }
 
     /// Every axis of the problem at its extent: what a routine partitions.
-    pub fn space(&self) -> Space {
+    pub(crate) fn space(&self) -> Space {
         Space::new(&[
             (B, self.batch),
             (KV, self.num_kv_heads),
@@ -82,7 +82,7 @@ impl AttentionBackwardProblem {
     /// One stage of the operands a walk holds `extent` of along `walked`, a row of each spanning
     /// `D` and `DV`: the keys and values the query walk stages, or the queries and output
     /// gradient the key walk does.
-    pub fn stage(&self, walked: Axis, extent: usize) -> [StagedOperand; 2] {
+    pub(crate) fn stage(&self, walked: Axis, extent: usize) -> [StagedOperand; 2] {
         let operand = |row: Axis, width: usize| StagedOperand {
             element: self.element,
             space: Space::new(&[(walked, extent), (row, width)]),
@@ -93,7 +93,7 @@ impl AttentionBackwardProblem {
 
     /// The element `operand` is stored in: the logsumexp and the dot products at the sum's, the
     /// rest at the problem's.
-    pub fn elements(&self) -> AttentionBackwardOperands<ElemType> {
+    pub(crate) fn elements(&self) -> AttentionBackwardOperands<ElemType> {
         AttentionBackwardOperands::from_fn(|operand| match operand {
             AttentionBackwardOperand::Logsumexp | AttentionBackwardOperand::Delta => Self::SUM,
             _ => self.element,

@@ -21,7 +21,7 @@ pub struct AttentionBackwardCandidate<R: AttentionBackwardRoutine> {
 
 impl<R: AttentionBackwardRoutine + Copy> AttentionBackwardCandidate<R> {
     /// Every setting `routine` lists on `hw`, as autotune candidates, its default first.
-    pub fn list(routine: R, hw: &Hardware) -> Vec<Self> {
+    pub(crate) fn list(routine: R, hw: &Hardware) -> Vec<Self> {
         routine
             .settings(hw)
             .into_iter()
@@ -35,7 +35,7 @@ impl<R: AttentionBackwardRoutine + Copy> AttentionBackwardCandidate<R> {
 
     /// `tensors`' gradients written by this candidate's routine at its setting, or why it did not
     /// run.
-    pub fn launch(&self, tensors: AttentionBackwardTensors) -> Result<(), String> {
+    pub(crate) fn launch(&self, tensors: AttentionBackwardTensors) -> Result<(), String> {
         let hw = Hardware::from_client(tensors.client());
         self.routine
             .launch_on(&hw, tensors, &self.settings)

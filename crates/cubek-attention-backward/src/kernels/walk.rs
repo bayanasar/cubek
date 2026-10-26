@@ -51,7 +51,7 @@ impl<M: AttentionBackwardMicrokernel, SM> AttentionBackwardWalk<M, SM> {
     /// buffer alignment, where its view starts, and the masking of an operand whose innermost
     /// axis the tiles overhang. Each operand then binds at the widest width this device reads its
     /// element in that they admit.
-    pub fn new(
+    pub(crate) fn new(
         hw: &Hardware,
         problem: &AttentionBackwardProblem,
         microkernel: M,
@@ -92,7 +92,7 @@ impl<M: AttentionBackwardMicrokernel, SM> AttentionBackwardWalk<M, SM> {
     /// The partitioning the walk's kernel compiles against: every extent a launch varies — the
     /// batches, the key heads, the queries and the keys — left to the launch, and the group and
     /// the dims a row spans compiled in, which a row's registers are sized by.
-    pub fn kernel_partitioning(&self) -> Partitioning {
+    pub(crate) fn kernel_partitioning(&self) -> Partitioning {
         Partitioning::new(
             self.partitioning
                 .space()
