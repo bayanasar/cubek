@@ -9,12 +9,13 @@ use crate::tiled::{K, M, N, cpu_gemm::base::CpuGemmBlueprint};
 
 /// The register block the software instruction runs under on a CPU backend: a wide scalar
 /// register budget to unroll against and the dual-path edge specialization, with no units to
-/// fan out over. Stated here because the kernel is what runs it.
-pub const REGISTER_BLOCK: RegisterBlock = RegisterBlock::new(256).split_edge();
+/// fan out over. A rhs lined along `K` is contracted into partials, a lane each, since nothing
+/// but the store reads the block. Stated here because the kernel is what runs it.
+pub const REGISTER_BLOCK: RegisterBlock = RegisterBlock::new(256).split_edge().partials();
 
 /// The routine's three levels, stated **from the leaf up, in counts**: the register block,
 /// every step of `K` in its depth, the planes a cube holds (the parallel worker threads), and a
-/// cube per box of the output (a serial loop on CPU). The kernel's loops state them one by one
+/// cube per box of the output (a serial loop on CPU), taken in the blueprint's order. The kernel's loops state them one by one
 /// and read their leaf and overhangs off the same list.
 pub fn cpu_gemm_levels(bp: &CpuGemmBlueprint, batch: &[Axis]) -> Vec<Level> {
     let (leaf, p) = (bp.instruction, bp.planes);
@@ -22,6 +23,7 @@ pub fn cpu_gemm_levels(bp: &CpuGemmBlueprint, batch: &[Axis]) -> Vec<Level> {
         .walk_every(&[K])
         .planes(&[(M, p.m), (N, p.n)])
         .cubes(&[M, N])
+        .ordered(bp.order)
         .batches(batch)
         .build()
 }
@@ -52,9 +54,10 @@ impl CpuGemmBlueprint {
 /// `c = a · b` in register blocks.
 ///
 /// Each operand arrives as one argument bundling its tensor with its comptime spec; the one
-/// kernel [`Space`] is built here and projected onto each in the first lines. `a` stays scalar
-/// (broadcast per `K`); `b` and `c` carry the launch-chosen line size along their contiguous `N`
-/// axis. Each keeps its own element, the one it is bound at for the inputs and the stored output,
+/// kernel [`Space`] is built here and projected onto each in the first lines. Lines run one of
+/// two ways, as the launch reads the rhs: along `N`, `b` and `c` in lines and `a` scalar
+/// (broadcast per `K`); or, for a rhs contiguous along `K`, along `K`, `a` and `b` in lines of one
+/// run each and `c` scalar, each cell a line of partials summed at the store. Each keeps its own element, the one it is bound at for the inputs and the stored output,
 /// `EA` for the accumulator, and the leaf casts the inputs into `EA`, so mixed-precision GEMM
 /// falls out of one kernel (same dtype is the case where every element is `EA`, and the casts
 /// vanish).

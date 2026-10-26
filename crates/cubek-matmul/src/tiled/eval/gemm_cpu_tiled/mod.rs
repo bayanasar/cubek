@@ -23,6 +23,7 @@ use cubecl::{
 };
 use cubek_std::InputBinding;
 use cubek_test_utils::{CatalogEntry, RunSamples, TestInput};
+use cubek_tile::space::CubeOrder;
 
 use crate::{
     definition::MatmulElems,
@@ -147,6 +148,7 @@ impl Benchmark for TiledBench {
             &BlueprintStrategy::Forced(CpuGemmBlueprint {
                 instruction: LEAF,
                 planes: self.strategy.planes,
+                order: CubeOrder::RowMajor,
             }),
             &self.dtypes,
         )

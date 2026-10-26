@@ -15,7 +15,7 @@ use cubek_std::{InputBinding, MatrixLayout};
 use cubek_test_utils::{TestInput, skip_unless_cpu};
 use cubek_tile::{
     Axis, Geometry, Launcher, Partitioning, Projection, Space, TileArg, TileArgLaunch, TileSpec,
-    launch::Grid,
+    launch::Grid, space::CubeOrder,
 };
 
 use super::Dims;
@@ -270,6 +270,7 @@ fn run(lhs_layout: InnerLayout, rhs_layout: InnerLayout, out_layout: InnerLayout
                 k: tile,
             },
             planes: PlaneGrid { m: 2, n: 2 },
+            order: CubeOrder::RowMajor,
         }),
         &dtypes,
     )

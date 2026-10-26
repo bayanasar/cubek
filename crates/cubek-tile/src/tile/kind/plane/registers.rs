@@ -49,13 +49,14 @@ pub(crate) struct RegisterData {
     pub(crate) vector_size: usize,
     /// Contracted values one step of the rhs brings for one cell: `1` for an rhs lined along the
     /// block's columns, else the run a load holds of a column, which each step sums into its
-    /// cell, so the block is one value wide.
+    /// cell, so the block is one value wide, or, [opened for partials](RegisterBlock::partials),
+    /// keeps a lane each of, so a line is one cell `fold` wide.
     #[cube(comptime)]
     pub(crate) fold: usize,
     /// Rows in the block.
     #[cube(comptime)]
     pub(crate) mr: usize,
-    /// Lines per row: `n / vector_size`.
+    /// Lines per row: `n / vector_size`, or `n` where a line holds one cell's partials.
     #[cube(comptime)]
     pub(crate) nr: usize,
     /// The sink's matrix this block was sized against.
@@ -67,6 +68,30 @@ pub(crate) struct RegisterData {
     /// What this block accumulates, and so the `⊕` its partials merge under.
     #[cube(comptime)]
     pub(crate) accumulation: Accumulation,
+}
+
+/// Whether a block of `vector_size`-wide lines contracting `fold` values a step holds each run's
+/// products a lane each, one cell a line, rather than whole cells.
+pub(crate) fn holds_partials(fold: usize, vector_size: usize) -> bool {
+    fold > 1 && vector_size > 1
+}
+
+/// The cells one `vector_size`-wide line holds: one where it holds a cell's partials.
+fn cells_per_line(fold: usize, vector_size: usize) -> usize {
+    match holds_partials(fold, vector_size) {
+        true => 1,
+        false => vector_size,
+    }
+}
+
+/// Panics where a block of `vector_size`-wide lines folding `fold` holds a cell's partials: its
+/// cells are whole only at the drain, and `site` reads them before.
+pub(crate) fn assert_whole_cells(fold: usize, vector_size: usize, site: &str) {
+    assert!(
+        !holds_partials(fold, vector_size),
+        "{site}: the block holds each cell as {vector_size} partials, summed only at its drain; \
+         open it without `RegisterBlock::partials` to read its cells"
+    );
 }
 
 /// Bind the block width `RA` for what follows. A kernel may hold blocks of several widths, as an
@@ -82,7 +107,8 @@ pub(crate) fn register_block_size(#[comptime] vector_size: usize) {
 #[cube]
 impl RegisterData {
     /// An uninitialized `m × n` block of `vector_size`-wide lines, contracting an rhs that brings
-    /// `fold` values of a cell a step. `n` must be a whole number of lines.
+    /// `fold` values of a cell a step. `n` must be a whole number of lines; a line `fold` wide holds
+    /// one cell's partials, so then `n` is any width.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn alloc<T: Numeric>(
         #[comptime] m: usize,
@@ -94,16 +120,17 @@ impl RegisterData {
         #[comptime] accumulation: Accumulation,
     ) -> RegisterData {
         comptime!(assert!(
-            fold == 1 || vector_size == 1,
+            fold == 1 || vector_size == 1 || vector_size == fold,
             "RegisterData::alloc: a block contracting {fold} values of a cell a step sums them into \
-             the cell, so it is one value wide, not {vector_size}"
+             the cell, one value wide, or keeps them a lane each, {fold} wide; not {vector_size}"
         ));
+        let cells = comptime!(cells_per_line(fold, vector_size));
         comptime!(assert!(
-            vector_size > 0 && n.is_multiple_of(vector_size),
+            vector_size > 0 && n.is_multiple_of(cells),
             "RegisterData::alloc: n ({n}) must be a whole number of {vector_size}-wide lines"
         ));
         register_block_size(vector_size);
-        let nr = comptime!(n / vector_size);
+        let nr = comptime!(n / cells);
         RegisterData {
             data: Raw::<Registers<RA>>::of::<T>(Array::<Vector<T, RA>>::new(comptime!(m * nr))),
             vector_size,
@@ -120,14 +147,23 @@ impl RegisterData {
         self.init::<T>(T::from_int(0));
     }
 
+    /// Every cell at `val`. A cell held as partials takes it in its first lane and the identity
+    /// in the rest, so its lanes sum to `val`.
     pub(crate) fn init<T: Numeric>(&mut self, val: T) {
         register_block_size(self.vector_size);
         let data = self.data.at_mut::<T>();
         let count = comptime!(self.mr * self.nr);
+        let mut line = Vector::<T, RA>::cast_from(val);
+        if comptime!(holds_partials(self.fold, self.vector_size)) {
+            line = Vector::<T, RA>::cast_from(Monoid::identity::<T>(comptime!(
+                self.accumulation.monoid()
+            )));
+            line.insert(0usize, val);
+        }
         #[allow(clippy::needless_range_loop)]
         #[unroll]
         for i in 0..count {
-            data[i] = Vector::<T, RA>::cast_from(val);
+            data[i] = line;
         }
     }
 
@@ -135,7 +171,10 @@ impl RegisterData {
     pub(crate) fn add_cast_from<T: Numeric, S: Numeric>(&mut self, src: &RegisterData) {
         let data = self.data.at_mut::<T>();
         comptime!(assert!(
-            self.mr == src.mr && self.nr == src.nr && self.fold == src.fold,
+            self.mr == src.mr
+                && self.nr == src.nr
+                && self.fold == src.fold
+                && self.vector_size == src.vector_size,
             "RegisterData::add_cast_from: the blocks are {}x{} fold {} and {}x{} fold {}; a \
              promotion adds line for line and both are opened against one sink",
             self.mr,
@@ -185,14 +224,26 @@ impl RegisterData {
 
 #[cube]
 impl RegisterData {
-    /// Write the block into `mem`'s window, casting down to its element.
+    /// Write the block into `mem`'s window, casting down to its element. A block of partials sums
+    /// each line's lanes into its cell on the way out, into a sink one value a cell.
     pub(crate) fn store_cast_window<T: Numeric, Out: Numeric>(
         &self,
         mem: &mut Memory,
         #[comptime] space: Space,
     ) {
         register_block_size(self.vector_size);
-        self.drain::<T, Out, RA>(mem, space);
+        let size!(A) = comptime!(cells_per_line(self.fold, self.vector_size));
+        self.drain::<T, Out, A>(mem, space);
+    }
+
+    /// The cell a line drains to: the line, or the sum of its partials.
+    fn drained<T: Numeric, Out: Numeric, A: Size>(&self, line: Vector<T, RA>) -> Vector<Out, A> {
+        if comptime!(holds_partials(self.fold, self.vector_size)) {
+            let monoid = comptime!(self.accumulation.monoid());
+            Vector::<Out, A>::cast_from(Monoid::reduce::<T, RA>(line, self.vector_size, monoid))
+        } else {
+            Vector::<Out, A>::cast_from(line)
+        }
     }
 
     /// [`store_cast_window`](Self::store_cast_window) into a sink of `A`-wide cells.
@@ -211,7 +262,7 @@ impl RegisterData {
                 for i in 0..comptime!(self.mr) {
                     #[unroll]
                     for n in 0..comptime!(self.nr) {
-                        let cell = Vector::<Out, A>::cast_from(data[comptime!(i * self.nr + n)]);
+                        let cell = self.drained::<T, Out, A>(data[comptime!(i * self.nr + n)]);
                         sink.write(((i as u32).runtime(), (n as u32).runtime()), cell);
                     }
                 }
@@ -222,7 +273,7 @@ impl RegisterData {
                 for i in 0..comptime!(self.mr) {
                     #[unroll]
                     for n in 0..comptime!(self.nr) {
-                        let cell = Vector::<Out, A>::cast_from(data[comptime!(i * self.nr + n)]);
+                        let cell = self.drained::<T, Out, A>(data[comptime!(i * self.nr + n)]);
                         if UNIT_POS_X == 0 {
                             sink.write(((i as u32).runtime(), (n as u32).runtime()), cell);
                         }
@@ -237,7 +288,7 @@ impl RegisterData {
                     for n in 0..comptime!(self.nr) {
                         let combined = UnitShare::Plane
                             .reduce::<Vector<T, RA>>(data[comptime!(i * self.nr + n)], monoid);
-                        let cell = Vector::<Out, A>::cast_from(combined);
+                        let cell = self.drained::<T, Out, A>(combined);
                         if UNIT_POS_X == 0 {
                             sink.write(((i as u32).runtime(), (n as u32).runtime()), cell);
                         }
@@ -252,7 +303,7 @@ impl RegisterData {
                     for n in 0..comptime!(self.nr) {
                         let combined = comptime!(UnitShare::Group { unit_bits })
                             .reduce::<Vector<T, RA>>(data[comptime!(i * self.nr + n)], monoid);
-                        let cell = Vector::<Out, A>::cast_from(combined);
+                        let cell = self.drained::<T, Out, A>(combined);
                         let unit_in_group = UNIT_POS_X & comptime!(unit_bits as u32);
                         if unit_in_group == 0 {
                             sink.write(((i as u32).runtime(), (n as u32).runtime()), cell);
@@ -266,7 +317,7 @@ impl RegisterData {
 
 /// The block cut into slices along its columns, each a unit holds whole: the verbs
 /// [`AxisSlices`] runs on a register block. The block holds whole cells, never a line of partials
-/// of one.
+/// of one ([`assert_whole_cells`]).
 #[cube]
 impl RegisterData {
     /// `self[i, s] = self[i, s] · scale + bias[i, s]` at every cell, the bias read at the cell of

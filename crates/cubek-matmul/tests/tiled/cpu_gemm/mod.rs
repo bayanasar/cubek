@@ -14,6 +14,7 @@ use cubek_matmul::{
 };
 use cubek_std::MatrixLayout;
 use cubek_test_utils::skip_unless_cpu;
+use cubek_tile::space::CubeOrder;
 
 type TestRuntime = cubecl::TestRuntime;
 
@@ -82,6 +83,7 @@ fn mixed_precision_f16_inputs_f32_acc() {
                 k: tile_size,
             },
             planes: PlaneGrid { m: 2, n: 2 },
+            order: CubeOrder::RowMajor,
         }))
         .into(),
     );
@@ -132,6 +134,7 @@ fn very_small_square() {
                 k: tile_size,
             },
             planes: PlaneGrid { m: 2, n: 2 },
+            order: CubeOrder::RowMajor,
         }))
         .into(),
     );
@@ -182,6 +185,7 @@ fn small_square() {
                 k: tile_size,
             },
             planes: PlaneGrid { m: 2, n: 2 },
+            order: CubeOrder::RowMajor,
         }))
         .into(),
     );
@@ -232,6 +236,7 @@ fn rectangular() {
                 k: tile_size,
             },
             planes: PlaneGrid { m: 2, n: 2 },
+            order: CubeOrder::RowMajor,
         }))
         .into(),
     );
@@ -282,6 +287,7 @@ fn single_tile() {
                 k: tile_size,
             },
             planes: PlaneGrid { m: 2, n: 2 },
+            order: CubeOrder::RowMajor,
         }))
         .into(),
     );
@@ -293,6 +299,40 @@ fn single_tile() {
 #[test]
 fn many_tiles_inferred_size() {
     let (batch, m, n, k) = (1, 64, 64, 128);
+    let client = cubecl::test_device().client();
+    if skip_unless_cpu(&client) {
+        return;
+    }
+    let problem = MatmulProblem::from_parameters(
+        m,
+        n,
+        k,
+        shape![batch],
+        shape![batch],
+        MatrixLayout::RowMajor,
+        MatrixLayout::ColMajor,
+        MatrixLayout::RowMajor,
+        None,
+        None,
+        MatmulElems::from_single_dtype(f32::elem_type_native()).as_global_elems(),
+        AddressType::U32,
+    );
+    test_matmul_strategy(
+        client,
+        problem,
+        Tiled::CpuGemm(BlueprintStrategy::Inferred(CpuGemmStrategy::default())).into(),
+    );
+}
+
+/// The `Inferred` heuristic on a 1x1 convolution's layout, a col-major rhs beside a row-major
+/// lhs, tall enough for the swizzled cube order to walk several whole strips. Both operands are
+/// read in runs along `K`, `272` being seventeen of them at the CPU's sixteen lanes, and each cell
+/// holds a run's partials until the store. On a sixteen-thread host the plan is a `3x2` tile on
+/// `16x1` planes, so a cube is `48` rows and the `1536` rows are `32` boxes, strips of `4` or `8`
+/// as the last-level cache is unreported or reported.
+#[test]
+fn k_lines_inferred_in_whole_swizzle_strips() {
+    let (batch, m, n, k) = (1, 1536, 64, 272);
     let client = cubecl::test_device().client();
     if skip_unless_cpu(&client) {
         return;
@@ -381,6 +421,7 @@ fn transposed_lhs_batched() {
                 k: tile_size,
             },
             planes: PlaneGrid { m: 2, n: 2 },
+            order: CubeOrder::RowMajor,
         }))
         .into(),
     );
@@ -431,6 +472,7 @@ fn batched_small() {
                 k: tile_size,
             },
             planes: PlaneGrid { m: 2, n: 2 },
+            order: CubeOrder::RowMajor,
         }))
         .into(),
     );
@@ -481,6 +523,7 @@ fn batched_rectangular() {
                 k: tile_size,
             },
             planes: PlaneGrid { m: 2, n: 2 },
+            order: CubeOrder::RowMajor,
         }))
         .into(),
     );
@@ -519,6 +562,7 @@ fn indivisible_all_axes() {
                 k: tile_size,
             },
             planes: PlaneGrid { m: 2, n: 2 },
+            order: CubeOrder::RowMajor,
         }))
         .into(),
     );
@@ -557,6 +601,7 @@ fn indivisible_rectangular_batched() {
                 k: tile_size,
             },
             planes: PlaneGrid { m: 2, n: 2 },
+            order: CubeOrder::RowMajor,
         }))
         .into(),
     );
@@ -687,6 +732,7 @@ fn broadcast_rhs_unbatched() {
                 k: tile_size,
             },
             planes: PlaneGrid { m: 2, n: 2 },
+            order: CubeOrder::RowMajor,
         }))
         .into(),
     );
@@ -725,6 +771,7 @@ fn broadcast_lhs_unbatched() {
                 k: tile_size,
             },
             planes: PlaneGrid { m: 2, n: 2 },
+            order: CubeOrder::RowMajor,
         }))
         .into(),
     );
@@ -765,6 +812,7 @@ fn broadcast_two_axes() {
                 k: tile_size,
             },
             planes: PlaneGrid { m: 2, n: 2 },
+            order: CubeOrder::RowMajor,
         }))
         .into(),
     );
@@ -804,6 +852,7 @@ fn batched_two_axes() {
                 k: tile_size,
             },
             planes: PlaneGrid { m: 2, n: 2 },
+            order: CubeOrder::RowMajor,
         }))
         .into(),
     );
@@ -842,6 +891,7 @@ fn broadcast_indivisible() {
                 k: tile_size,
             },
             planes: PlaneGrid { m: 2, n: 2 },
+            order: CubeOrder::RowMajor,
         }))
         .into(),
     );
@@ -941,6 +991,7 @@ fn accumulator_holds_steps_the_output_element_cannot() {
                 k: tile,
             },
             planes: PlaneGrid { m: 1, n: 1 },
+            order: CubeOrder::RowMajor,
         }),
         &MatmulElems::from_globals(&Globals {
             lhs: f16t,

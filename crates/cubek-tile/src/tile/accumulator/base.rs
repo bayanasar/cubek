@@ -576,8 +576,13 @@ fn register_accumulator<EA: Numeric>(
          {aw}-wide cells; a stage served wider than its sink is the memory-backed leaf's \
          (Tile::accumulating)"
     ));
-    // A block contracting runs along the contraction sums each into its cell, one value wide.
-    let width = comptime!(if fold > 1 { 1 } else { rw });
+    // A block contracting runs along the contraction sums each into its cell, one value wide, or,
+    // asked for partials, keeps a run's products a lane each in a cell as wide as the run.
+    let width = comptime!(match (fold > 1, config.partials) {
+        (true, true) => fold,
+        (true, false) => 1,
+        (false, _) => rw,
+    });
     accumulator_in::<EA>(
         out,
         lhs,

@@ -2,6 +2,7 @@
 //! entries, so the two architectures are compared on one table.
 
 use cubek_test_utils::CatalogEntry;
+use cubek_tile::space::CubeOrder;
 
 use crate::{
     routine::BlueprintStrategy,
@@ -44,6 +45,7 @@ fn cpu_gemm_leaf(
                 m: plane_m,
                 n: plane_n,
             },
+            order: CubeOrder::RowMajor,
         }))
         .into(),
     )

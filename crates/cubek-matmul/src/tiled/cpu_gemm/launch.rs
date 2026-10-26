@@ -29,6 +29,13 @@ fn validate_strided(strides: &[usize]) -> Result<(), MatmulSetupError> {
     }
 }
 
+/// Whether `inner` is the axis along which `binding`'s neighbouring values sit next to each other
+/// in memory, i.e. the axis with the smallest stride.
+fn steps_innermost(binding: &TensorBinding, axes: &[Axis], inner: Axis) -> bool {
+    !binding.tiling.is_tiled()
+        && Geometry::from(binding).in_stride_order(axes).1.last() == Some(&inner)
+}
+
 /// CpuGemm reads each input where it already lies, so it carries one type per input from
 /// global memory to the leaf, where the cast into the accumulator happens. A stage or register
 /// type of its own is a second conversion this routine does not emit. The accumulator is not
@@ -87,13 +94,22 @@ pub fn launch_ref(
         )))
     })?;
 
+    // A rhs contiguous along `K` rather than `N`.
+    let lines_along_k =
+        steps_innermost(rhs.data(), &[K, N], K) && steps_innermost(lhs.data(), &[M, K], K);
+
     let address_type = lhs
         .required_address_type()
         .max(rhs.required_address_type())
         .max(out.required_address_type(sz));
 
-    // CpuGemm reads only `(m, n, k, batches)` + global dtypes off the problem; each operand's
-    // physical layout rides in its own strides, so the matrix-layout args are placeholders.
+    // CpuGemm reads only `(m, n, k, batches)` + global dtypes off the problem, and the rhs layout
+    // for which way its lines run; each operand's physical layout rides in its own strides, so the
+    // other matrix-layout args are placeholders.
+    let rhs_layout = match lines_along_k {
+        true => MatrixLayout::ColMajor,
+        false => MatrixLayout::RowMajor,
+    };
     let problem = MatmulProblem::from_parameters(
         m,
         n,
@@ -101,7 +117,7 @@ pub fn launch_ref(
         lhs_batches[..].into(),
         rhs_batches[..].into(),
         MatrixLayout::RowMajor,
-        MatrixLayout::RowMajor,
+        rhs_layout,
         MatrixLayout::RowMajor,
         lhs.scheme(),
         rhs.scheme(),
@@ -156,11 +172,64 @@ pub fn launch_ref(
         )?
     };
 
-    // One `N` line width shared by `rhs` and the output (the leaf writes the lines it reads);
-    // `lhs` is always scalar (broadcast per `K`), so its layout never matters. The launcher
-    // owns the gate: both operands unchecked and `N`-contiguous, the width dividing their
-    // inner extents and the `N` leaf edge.
+    // Bind each operand to its binding: the subspace comes off the operand, the batch list and
+    // storage tiling are per-binding launch facts. All operands get the full output batch-axis
+    // list; the builder right-aligns it to each operand's leading dims (numpy broadcast, size-1
+    // dims drop out).
+    let out_batch_axes: Vec<Axis> = (0..out_batches.len()).map(batch_axis).collect();
+    let lhs = lhs.into_data();
     let rhs = rhs.into_data();
+
+    // One `K` line width shared by `lhs` and `rhs`, the rhs bound in its buffer's order so `K` is
+    // its innermost axis; each cell of the block keeps a run's products a lane each, summed at the
+    // store, so the output is scalar. The launcher owns the gate, as below.
+    let vk = match lines_along_k {
+        true => {
+            let (rhs_geometry, rhs_axes) = Geometry::from(&rhs).in_stride_order(&[K, N]);
+            launch.vector_size(
+                K,
+                &[(&Geometry::from(&lhs), &[M, K]), (&rhs_geometry, &rhs_axes)],
+                sz,
+            )
+        }
+        false => 1,
+    };
+    if vk > 1 {
+        let a = launch
+            .arg(lhs, dtypes.lhs_global)
+            .axes(&[M, K])
+            .batches(&out_batch_axes)
+            .vectorize(vk)
+            .build()?;
+        let b = launch
+            .arg(rhs, dtypes.rhs_global)
+            .axes(&[K, N])
+            .in_stride_order()
+            .batches(&out_batch_axes)
+            .vectorize(vk)
+            .build()?;
+        let c = launch
+            .arg(out, dtypes.acc_global)
+            .axes(&[M, N])
+            .batches(&out_batch_axes)
+            .build()?;
+        cpu_gemm_kernel::launch(
+            client,
+            launch.cube_count(),
+            launch.cube_dim(),
+            a.arg(),
+            b.arg(),
+            c.arg(),
+            launch.partitioning_arg(),
+            dtypes.acc_register,
+        );
+        return Ok(());
+    }
+
+    // One `N` line width shared by `rhs` and the output (the leaf writes the lines it reads);
+    // `lhs` is scalar (broadcast per `K`), so its layout never matters. The launcher owns the
+    // gate: both operands unchecked and `N`-contiguous, the width dividing their inner extents
+    // and the `N` leaf edge.
     let v = launch.vector_size(
         N,
         &[
@@ -169,14 +238,8 @@ pub fn launch_ref(
         ],
         sz,
     );
-
-    // Bind each operand to its binding: the subspace comes off the operand, the batch list and
-    // storage tiling are per-binding launch facts. All operands get the full output batch-axis
-    // list; the builder right-aligns it to each operand's leading dims (numpy broadcast, size-1
-    // dims drop out).
-    let out_batch_axes: Vec<Axis> = (0..out_batches.len()).map(batch_axis).collect();
     let a = launch
-        .arg(lhs.into_data(), dtypes.lhs_global)
+        .arg(lhs, dtypes.lhs_global)
         .axes(&[M, K])
         .batches(&out_batch_axes)
         .build()?;
