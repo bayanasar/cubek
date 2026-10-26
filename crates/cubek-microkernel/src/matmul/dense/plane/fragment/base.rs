@@ -273,21 +273,22 @@ impl PlaneFragmentMicrokernel {
     }
 
     /// The axes `K` is stated over, each with what one fragment `depth` instruction steps deep
-    /// spans of it: the instruction's whole step along the caller's `K` axis, or, where a
-    /// block-scaled instruction reads packed inputs in their blocks, a word of block scales' blocks
-    /// along `KB` beside the whole of each block along `KI`.
+    /// spans of it: the instruction's whole step along the caller's `K` axis, or, where the plane
+    /// reads a packed rhs as stored (the block-scaled instruction, or fragments that decode it as
+    /// they load), the blocks its steps cover along `KB` beside the whole of each block along
+    /// `KI`.
     fn k_axes(&self, depth: usize) -> Vec<(Axis, usize)> {
         let [_, _, (_, k)] = self.instruction.shape();
-        match (self.blocks, self.instruction.block_scaled()) {
-            (Some(space), true) => {
-                let rhs = space.operand(MatmulOperand::Rhs);
-                let block = rhs
+        match self.blocks {
+            Some(space) => {
+                let block = space
+                    .operand(MatmulOperand::Rhs)
                     .grouping(K, space.k)
-                    .expect("a block-scaled plane reads inputs grouped along K");
+                    .expect("a plane reading a packed rhs as stored reads it grouped along K");
                 let (blocks, inside) = blocked(K);
-                vec![(blocks, rhs.scale_read(K) * depth), (inside, block)]
+                vec![(blocks, k * depth / block), (inside, block)]
             }
-            _ => vec![(self.axes.k, k * depth)],
+            None => vec![(self.axes.k, k * depth)],
         }
     }
 
@@ -341,11 +342,12 @@ impl PlaneFragmentMicrokernel {
         }
     }
 
-    /// The axis its steps of `K` walk: `K` itself, or the blocks a block-scaled plane steps across.
+    /// The axis its steps of `K` walk: `K` itself, or the blocks a plane reading a packed rhs as
+    /// stored steps across.
     pub fn walked(&self) -> Axis {
-        match (self.blocks, self.instruction.block_scaled()) {
-            (Some(_), true) => blocked(K).0,
-            _ => self.axes.k,
+        match self.blocks {
+            Some(_) => blocked(K).0,
+            None => self.axes.k,
         }
     }
 
