@@ -23,7 +23,11 @@ use cubek_std::routine::Routine;
 use cubek_test_utils::{HostData, HostDataType, TestOutcome, ValidationResult, client};
 
 /// `values` uploaded as a dense tensor of `shape`.
-fn upload<E: CubeElement + Scalar>(client: &Client, shape: &[usize], values: &[E]) -> PlainTensor {
+pub(super) fn upload<E: CubeElement + Scalar>(
+    client: &Client,
+    shape: &[usize],
+    values: &[E],
+) -> PlainTensor {
     let handle = TensorHandle::new_contiguous(
         Shape::from(shape.to_vec()),
         client.create(Bytes::from_elems(values.to_vec())),
