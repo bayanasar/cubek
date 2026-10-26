@@ -192,7 +192,7 @@ fn the_backward_pass_reads_the_forward_it_follows() {
     )
     .expect("the forward's tensors are verified");
     let routine = UnitAttentionBackwardRoutine;
-    let settings = routine.settings(&hw).swap_remove(0);
+    let settings = routine.lead(&hw);
     let gradients = routine
         .launch_on(&hw, backward, &settings)
         .expect("the unit routine runs everywhere");

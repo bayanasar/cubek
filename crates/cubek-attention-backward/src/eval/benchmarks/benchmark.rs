@@ -91,7 +91,7 @@ impl AttentionBackwardBench {
         tensors: AttentionBackwardTensors,
     ) -> Result<(), String> {
         let hw = Hardware::from_client(&self.client);
-        let lead = routine.settings(&hw).swap_remove(0);
+        let lead = routine.lead(&hw);
         routine
             .launch_on(&hw, tensors, &lead)
             .map(|_| ())

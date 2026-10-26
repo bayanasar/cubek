@@ -36,7 +36,7 @@ fn run(
     let reference = Reference::new(&client, case, element);
     let hw = Hardware::from_client(&client);
     let routine = PlaneFragmentAttentionBackwardRoutine;
-    let settings = settings.unwrap_or_else(|| routine.settings(&hw).swap_remove(0));
+    let settings = settings.unwrap_or_else(|| routine.lead(&hw));
     match routine.launch_on(&hw, reference.tensors.clone(), &settings) {
         Ok(gradients) => reference.check(&client, gradients, tolerance),
         Err(refusal) => eprintln!("{settings}: declined on this device, {refusal:?}"),

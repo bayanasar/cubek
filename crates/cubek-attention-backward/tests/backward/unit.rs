@@ -27,7 +27,7 @@ fn run(case: Case, element: ElemType, tolerance: f64) {
     let reference = Reference::new(&client, case, element);
     let hw = Hardware::from_client(&client);
     let routine = UnitAttentionBackwardRoutine;
-    let settings = routine.settings(&hw).swap_remove(0);
+    let settings = routine.lead(&hw);
     let gradients = routine
         .launch_on(&hw, reference.tensors.clone(), &settings)
         .expect("the unit routine runs everywhere");

@@ -60,7 +60,7 @@ pub fn attention_backward(
             "unit-attention-backward-lead",
             move |tensors: AttentionBackwardTensors| {
                 let routine = UnitAttentionBackwardRoutine;
-                let lead = routine.settings(&hw).swap_remove(0);
+                let lead = routine.lead(&hw);
                 routine
                     .launch_on(&hw, tensors, &lead)
                     .map(|_| ())

@@ -23,6 +23,11 @@ pub trait AttentionBackwardRoutine {
     /// The settings worth measuring on this device, the one a caller gets by default first.
     fn settings(&self, hw: &Hardware) -> Vec<Self::Settings>;
 
+    /// The setting a caller gets by default: the first [`settings`](Self::settings) lists.
+    fn lead(&self, hw: &Hardware) -> Self::Settings {
+        self.settings(hw).swap_remove(0)
+    }
+
     /// Both walks for `problem` on this device.
     ///
     /// # Errors
