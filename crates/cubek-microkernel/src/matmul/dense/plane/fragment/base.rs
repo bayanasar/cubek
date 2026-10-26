@@ -118,7 +118,8 @@ impl PlaneFragmentMicrokernel {
     }
 
     /// The planes against the packed rhs of `space`: one fragment of the decoding instruction's
-    /// rows, the settings' fragments along `n` and then every narrower count down to one, each
+    /// rows where the item holds its rows whole, the settings' fragments along `m` where a stage
+    /// tiles them; the settings' fragments along `n` and then every narrower count down to one, each
     /// where its columns close `n`, each fragment a window of the settings' steps of `K` through
     /// the tile DSL's transport. A window is whole windows of `K`, and a unit's run of it, one of
     /// the four quads of `k` its fragment's units split, whole reads of the rhs. Only settings
@@ -133,7 +134,11 @@ impl PlaneFragmentMicrokernel {
         let shape = Self::decoding_instruction(item.elements.lhs, item.sum);
         let window = settings.depth.get() * shape.k as usize;
         let runs_whole = (window / 4).is_multiple_of(space.operand(MatmulOperand::Rhs).read(K));
-        let windowed = settings.along_m == NonZeroUsize::MIN
+        // A plane holding every row whole holds one fragment of them; one whose rows are tiled, a
+        // stage's, holds the settings' fragments along `M`, each against the rhs fragment
+        // decoded once a step.
+        let rows_fit = settings.along_m == NonZeroUsize::MIN || item.rows == MatmulRows::Tiled;
+        let windowed = rows_fit
             && settings.transport == PlaneFragmentTransport::Mma
             && settings.fragment_depth == PlaneFragmentDepth::Stage;
         let offered = windowed
@@ -647,7 +652,7 @@ impl Microkernel for PlaneFragmentMicrokernel {
     ) -> impl Iterator<Item = Self> {
         let packed: Vec<Self> = match item.blocks {
             None => Vec::new(),
-            Some(space) if item.stages_scales_beside() => {
+            Some(space) if item.both_stored_in_e2m1() => {
                 Self::block_scaled_candidates(hw, item, *settings, space)
             }
             Some(space) => Self::packed_candidates(hw, item, *settings, space).collect(),
