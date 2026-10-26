@@ -3,6 +3,8 @@
 //! walks within its inputs answers the reference at each setting it prepares; an entry past the
 //! stack, or an empty run, answers zeros.
 
+mod packed;
+
 use cubecl::bytes::Bytes;
 use cubecl::client::Client;
 use cubecl::prelude::*;
@@ -16,6 +18,7 @@ use cubek_matmul::kernels::{
 };
 use cubek_microkernel::matmul::MatmulMicrokernel;
 use cubek_std::Hardware;
+use cubek_std::matmul_axes::{K, N};
 use cubek_std::routine::Routine;
 use cubek_test_utils::{HostData, HostDataType, TestOutcome, ValidationResult, client};
 
@@ -57,34 +60,47 @@ fn check_every_setting<M, SM, R>(
     M: MatmulMicrokernel,
     R: MatmulRoutine<M, SM>,
 {
+    check_settings(
+        routine,
+        |routine, hw| routine.settings(hw),
+        || {
+            let (lhs, rhs, table) = inputs();
+            (lhs, StoredTensor::Plain(rhs), table)
+        },
+        expected,
+        1e-3,
+    );
+}
+
+/// [`check_every_setting`] over the settings `settings` names, on a stack that may be packed. The
+/// tolerance is relative to one or the element, so an `f16` output can ask for more than `f32`.
+fn check_settings<M, SM, R>(
+    routine: R,
+    settings: impl Fn(&R, &Hardware) -> Vec<R::Settings>,
+    inputs: impl Fn() -> (PlainTensor, StoredTensor, MatmulIndexTable),
+    expected: &[f32],
+    tolerance: f32,
+) where
+    M: MatmulMicrokernel,
+    R: MatmulRoutine<M, SM>,
+{
     let client = client();
     let hw = Hardware::from_client(&client);
     let mut ran = 0;
     let mut cubes_past_device = true;
-    for settings in routine.settings(&hw) {
+    for settings in settings(&routine, &hw) {
         let (lhs, rhs, table) = inputs();
-        // `[batches.., rows, n]`: the table's dims, then the activation's rows and the weight's
+        // `[batches.., rows, n]`: the table's dims, then the activation's rows and the stack's
         // columns.
-        let (lhs_shape, rhs_shape) = (lhs.shape(), rhs.shape());
+        let lhs_shape = lhs.shape();
         let shape = [
             table.entries.shape().as_slice(),
-            &[
-                lhs_shape[lhs_shape.rank() - 2],
-                rhs_shape[rhs_shape.rank() - 1],
-            ],
+            &[lhs_shape[lhs_shape.rank() - 2], rhs.extent([K, N], N)],
         ]
         .concat();
         let (out, bound) =
             PlainTensor::empty_contiguous(&client, Shape::from(shape.clone()), lhs.elem);
-        let launched = routine.launch_indexed_into(
-            &hw,
-            &client,
-            lhs,
-            StoredTensor::Plain(rhs),
-            table,
-            bound,
-            &settings,
-        );
+        let launched = routine.launch_indexed_into(&hw, &client, lhs, rhs, table, bound, &settings);
         if let Err(why) = launched {
             cubes_past_device &= matches!(why, Refusal::CubePastDevice { .. });
             continue;
@@ -94,11 +110,17 @@ fn check_every_setting<M, SM, R>(
         for (i, &want) in expected.iter().enumerate() {
             let have = got.get_f32(&unravel(i, &shape));
             assert!(
-                (have - want).abs() <= 1e-3 * (1. + want.abs()),
+                (have - want).abs() <= tolerance * (1. + want.abs()),
                 "{settings:?}: element {i} is {have}, want {want}"
             );
         }
     }
+    settled(ran, cubes_past_device);
+}
+
+/// The end of a walk over settings: at least one ran, unless every one asked for a cube larger
+/// than the device holds (the CPU runtime's few units), which skips the test.
+fn settled(ran: usize, cubes_past_device: bool) {
     if ran == 0 && cubes_past_device {
         TestOutcome::Validated(ValidationResult::Skipped(
             "every setting asks for a cube larger than this device holds".to_string(),
@@ -150,6 +172,14 @@ impl Routed {
     }
 
     fn expected(&self) -> Vec<f32> {
+        let Self { slabs, k, n, .. } = *self;
+        let (lhs, stack) = (values(self.tokens * k, 1), values(slabs * k * n, 2));
+        self.expected_from(&lhs, |slab, kk, j| stack[(slab * k + kk) * n + j])
+    }
+
+    /// The product of `lhs`, `[tokens, k]`, with `stack(slab, k, n)` read at the cells each route's
+    /// slab names.
+    fn expected_from(&self, lhs: &[f32], stack: impl Fn(usize, usize, usize) -> f32) -> Vec<f32> {
         let Self {
             tokens,
             picks,
@@ -157,11 +187,7 @@ impl Routed {
             k,
             n,
         } = *self;
-        let (lhs, stack, routes) = (
-            values(tokens * k, 1),
-            values(slabs * k * n, 2),
-            self.routes(),
-        );
+        let routes = self.routes();
         let mut out = vec![0.; tokens * picks * n];
         for t in 0..tokens {
             for p in 0..picks {
@@ -170,9 +196,8 @@ impl Routed {
                     continue;
                 }
                 for j in 0..n {
-                    out[(t * picks + p) * n + j] = (0..k)
-                        .map(|kk| lhs[t * k + kk] * stack[(slab * k + kk) * n + j])
-                        .sum();
+                    out[(t * picks + p) * n + j] =
+                        (0..k).map(|kk| lhs[t * k + kk] * stack(slab, kk, j)).sum();
                 }
             }
         }
