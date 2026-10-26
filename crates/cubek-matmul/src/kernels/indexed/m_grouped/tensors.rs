@@ -7,12 +7,12 @@ use cubek_std::Hardware;
 use cubek_std::layout::contiguous;
 use cubek_std::matmul_axes::{K, M, N};
 
-use crate::kernels::grouped_rows::PaddedRows;
-use crate::kernels::m_grouped::{
+use crate::kernels::indexed::m_grouped::grouped_rows::PaddedRows;
+use crate::kernels::indexed::m_grouped::{
     MGroupedChunk, MGroupedMatmulKey, MGroupedRowSource, MGroupedSettings,
 };
-use crate::kernels::routed::stack_extents;
-use crate::kernels::stack::{SlabAxis, SlabView};
+use crate::kernels::indexed::routed::stack_extents;
+use crate::kernels::indexed::stack::{SlabAxis, SlabView};
 use crate::kernels::tensor::{PlainTensor, StoredTensor};
 use crate::kernels::tune::key::OperandLayout;
 use crate::kernels::{

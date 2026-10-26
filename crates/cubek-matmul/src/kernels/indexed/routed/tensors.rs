@@ -9,8 +9,8 @@ use cubek_std::Hardware;
 use cubek_std::layout::contiguous;
 use cubek_std::matmul_axes::{K, N};
 
-use crate::kernels::routed::RoutedMatmulKey;
-use crate::kernels::stack::{SlabAxis, SlabView};
+use crate::kernels::indexed::routed::RoutedMatmulKey;
+use crate::kernels::indexed::stack::{SlabAxis, SlabView};
 use crate::kernels::tensor::{PlainTensor, StoredTensor};
 use crate::kernels::tune::key::OperandLayout;
 use crate::kernels::{
