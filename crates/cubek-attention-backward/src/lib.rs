@@ -24,12 +24,16 @@ pub mod eval;
 pub mod kernels;
 pub mod tune;
 
+mod blueprint;
 mod launch;
 mod problem;
 mod routine;
 mod tensors;
+mod walk;
 
+pub use blueprint::*;
 pub use launch::*;
 pub use problem::*;
 pub use routine::*;
 pub use tensors::*;
+pub use walk::*;
